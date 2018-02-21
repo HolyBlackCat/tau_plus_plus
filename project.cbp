@@ -66,6 +66,7 @@
 			<Add option="-Wall" />
 			<Add option="-std=c++17" />
 			<Add directory="libs/include" />
+			<Add directory="libs/win32/include" />
 		</Compiler>
 		<Linker>
 			<Add option="-static" />
@@ -87,7 +88,7 @@
 			<Add library="uuid" />
 			<Add library="freetype" />
 			<Add library="z" />
-			<Add directory="libs" />
+			<Add directory="libs/win32" />
 		</Linker>
 		<Unit filename="libs/glfl.cpp" />
 		<Unit filename="src/events.cpp" />
