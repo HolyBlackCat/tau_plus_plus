@@ -3,3 +3,8 @@
 *.gch
 *.depend
 *.layout
+
+
+#Clion
+.idea/
+cmake-build-debug/
