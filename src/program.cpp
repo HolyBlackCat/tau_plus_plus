@@ -40,6 +40,7 @@ namespace Program
     }
 }
 
+#ifdef _WIN32
 OnPC
 (
     extern "C"
@@ -49,3 +50,4 @@ OnPC
         __declspec(dllexport) int      AmdPowerXpressRequestHighPerformance = 1; // For Amd.
     }
 )
+#endif // _WIN32

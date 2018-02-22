@@ -66,25 +66,11 @@
 			<Add option="-Wall" />
 			<Add option="-std=c++17" />
 			<Add directory="libs/include" />
+			<Add directory="../../../../usr/include/freetype2" />
 		</Compiler>
 		<Linker>
-			<Add option="-static" />
-			<Add library="mingw32" />
 			<Add library="SDL2main" />
 			<Add library="SDL2" />
-			<Add library="m" />
-			<Add library="dinput8" />
-			<Add library="dxguid" />
-			<Add library="dxerr8" />
-			<Add library="user32" />
-			<Add library="gdi32" />
-			<Add library="winmm" />
-			<Add library="imm32" />
-			<Add library="ole32" />
-			<Add library="oleaut32" />
-			<Add library="shell32" />
-			<Add library="version" />
-			<Add library="uuid" />
 			<Add library="freetype" />
 			<Add library="z" />
 		</Linker>
