@@ -80,18 +80,18 @@ class Window
             display = n;
             return *this;
         }
-        ref Position(ivec2 p)
+        ref Pos(ivec2 p)
         {
             position = custom;
             coords = p;
             return *this;
         }
-        ref Position_Centered()
+        ref Pos_Centered()
         {
             position = centered;
             return *this;
         }
-        ref Position_Undefined()
+        ref Pos_Undefined()
         {
             position = undefined;
             return *this;
