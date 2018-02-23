@@ -39,6 +39,13 @@ namespace Renderers
 
         const Graphics::CharMap *ch_map = 0;
 
+        inline static const Graphics::Shader::Config shader_config = []
+        {
+            Graphics::Shader::Config ret;
+            ret.version = "120";
+            return ret;
+        }();
+
       public:
         class Quad_t
         {
@@ -891,15 +898,15 @@ namespace Renderers
         };
 
         Poly2D() {}
-        Poly2D(int size, const Graphics::Shader::Config &cfg = {})
+        Poly2D(int size, const Graphics::Shader::Config &cfg = shader_config)
         {
             Create(size, cfg);
         }
-        Poly2D(int size, const std::string &v_src, const std::string &f_src, const Graphics::Shader::Config &cfg = {})
+        Poly2D(int size, const std::string &v_src, const std::string &f_src, const Graphics::Shader::Config &cfg = shader_config)
         {
             Create(size, v_src, f_src, cfg);
         }
-        void Create(int size, const Graphics::Shader::Config &cfg = {})
+        void Create(int size, const Graphics::Shader::Config &cfg = shader_config)
         {
             constexpr const char *v = R"(
 VARYING( vec4 , color       )
@@ -928,7 +935,7 @@ void main()
 })";
             Create(size, v, f, cfg);
         }
-        void Create(int size, const std::string &v_src, const std::string &f_src, const Graphics::Shader::Config &cfg = {}) // With custom shader.
+        void Create(int size, const std::string &v_src, const std::string &f_src, const Graphics::Shader::Config &cfg = shader_config) // With custom shader.
         {
             decltype(shader) new_shader;
             new_shader.Create<Poly2D_impl::Attributes>("2D renderer", v_src, f_src, &uni, cfg);
