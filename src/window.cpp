@@ -15,6 +15,9 @@ void Window::OnMove(Window &&/*from*/, Window &to) noexcept
 
 SDL_Window *Window::WindowHandleFuncs::Create(std::string name, ivec2 size, Settings &settings)
 {
+    SDL_GL_SetAttribute(SDL_GL_ACCUM_RED_SIZE,8);
+    SDL_GL_SetAttribute(SDL_GL_ACCUM_GREEN_SIZE,8);
+    SDL_GL_SetAttribute(SDL_GL_ACCUM_BLUE_SIZE,8);
     uint32_t flags = SDL_WINDOW_OPENGL;
     uint32_t context_flags = 0;
 
