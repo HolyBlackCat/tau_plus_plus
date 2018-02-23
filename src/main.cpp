@@ -61,7 +61,6 @@ namespace Draw
         r.SetDefaultFont(font_main);
         r.BindShader();
 
-
         mouse.Transform(win.Size()/2, 1);
     }
 
