@@ -1,6 +1,8 @@
 #include "everything.h"
 
+#include <complex>
 #include <iostream>
+#include <list>
 
 Events::AutoErrorHandlers error_handlers;
 
@@ -39,8 +41,6 @@ namespace Draw
 
     void Init()
     {
-        Graphics::ClearColor(fvec3(1));
-
         Graphics::Blending::Enable();
         Graphics::Blending::FuncNormalPre();
 
@@ -62,18 +62,476 @@ namespace Draw
         r.BindShader();
 
         mouse.Transform(win.Size()/2, 1);
+    }
 
+    void Dot(fvec2 pos, fvec3 color, float alpha = 1, float beta = 1)
+    {
+        r.Quad(pos, ivec2(14)).tex(ivec2(1,1)).center().color(color).mix(0).alpha(alpha).beta(beta);
+    }
+    void Line(fvec2 a, fvec2 b, fvec3 color, float alpha = 1, float beta = 1)
+    {
+        int len = iround((b - a).len());
 
-        Graphics::Clear(Graphics::color);
-        Draw::Accumulator::Overwrite();
+        for (int i = 0; i <= len; i++)
+            Dot(a + (b - a) * i / len, color, alpha, beta);
     }
 }
+
+
+class Expression
+{
+    using complex_t = std::complex<long double>;
+
+  public:
+    struct Token
+    {
+        enum Type {num, lparen, rparen, op, var, imag_unit};
+        enum Operator {plus, minus, mul, fake_mul, div, pow, left_paren};
+
+        Type type;
+
+        int starts_at;
+
+        union
+        {
+            Operator op_type;
+            long double num_value;
+        };
+
+        std::string ToString() const
+        {
+            switch (type)
+            {
+              case num:
+                return std::to_string(num_value);
+              case lparen:
+                return "(";
+              case rparen:
+                return ")";
+              case var:
+                return "x";
+              case imag_unit:
+                return "j";
+              case op:
+                switch (op_type)
+                {
+                    case plus:       return "+";
+                    case minus:      return "-";
+                    case mul:        return "*";
+                    case fake_mul:   return "* (fake)";
+                    case div:        return "/";
+                    case pow:        return "^";
+                    case left_paren: return "(";
+                }
+            }
+            return "?";
+        }
+    };
+
+    static int Precedence(Token::Operator op)
+    {
+        switch (op)
+        {
+            case Token::plus:       return 1;
+            case Token::minus:      return 1;
+            case Token::mul:        return 2;
+            case Token::div:        return 2;
+            case Token::pow:        return 3;
+            case Token::fake_mul:   return 3;
+            case Token::left_paren: return -1;
+        }
+        return -1;
+    }
+    static bool IsRightAssociative(Token::Operator op)
+    {
+        return op == Token::pow || op == Token::fake_mul;
+    }
+    static complex_t (*OperatorFunc(Token::Operator op))(complex_t, complex_t)
+    {
+        switch (op)
+        {
+          case Token::plus:
+            return [](complex_t a, complex_t b){return a + b;};
+          case Token::minus:
+            return [](complex_t a, complex_t b){return a - b;};
+          case Token::mul:
+          case Token::fake_mul:
+            return [](complex_t a, complex_t b){return a * b;};
+          case Token::div:
+            return [](complex_t a, complex_t b){return a / b;};
+          case Token::pow:
+            return [](complex_t a, complex_t b){return std::pow(a, b);};
+          case Token::left_paren:
+            return 0;
+        }
+        return 0;
+    }
+
+    static bool Tokenize(std::string_view str, char var_name, std::list<Token> *list, int *error_pos, std::string *error_msg)
+    {
+        DebugAssert("`j` is reserved for the imaginary unit.", var_name != 'j');
+
+        std::list<Token> ret;
+        Token token;
+
+        int index = 0;
+        while (1)
+        {
+            token.starts_at = index;
+            switch (char ch = str[index])
+            {
+              case '\0':
+                *list = ret;
+                return 1;
+              case '(':
+                token.type = Token::lparen;
+                ret.push_back(token);
+                index++;
+                break;
+              case ')':
+                token.type = Token::rparen;
+                ret.push_back(token);
+                index++;
+                break;
+              case '+':
+                token.type = Token::op;
+                token.op_type = Token::plus;
+                ret.push_back(token);
+                index++;
+                break;
+              case '-':
+                token.type = Token::op;
+                token.op_type = Token::minus;
+                ret.push_back(token);
+                index++;
+                break;
+              case '*':
+                token.type = Token::op;
+                token.op_type = Token::mul;
+                ret.push_back(token);
+                index++;
+                break;
+              case '/':
+                token.type = Token::op;
+                token.op_type = Token::div;
+                ret.push_back(token);
+                index++;
+                break;
+              case '^':
+                token.type = Token::op;
+                token.op_type = Token::pow;
+                ret.push_back(token);
+                index++;
+                break;
+              default:
+                if ((unsigned char)ch <= ' ')
+                {
+                    index++;
+                    break;
+                }
+                if (ch >= '0' && ch <= '9')
+                {
+                    std::string num;
+                    num += ch;
+                    while (1)
+                    {
+                        ch = str[++index];
+                        if ((ch >= '0' && ch <= '9') || ch == '.' || ch == ',')
+                            num += (ch == ',' ? '.' : ch);
+                        else
+                            break;
+                    }
+
+                    long double value;
+                    if (auto end = Reflection::from_string(value, num.c_str()); end == num.c_str() + num.size())
+                    {
+                        token.type = Token::num;
+                        token.num_value = value;
+                        ret.push_back(token);
+                        break;
+                    }
+                    else
+                    {
+                        index = token.starts_at;
+                    }
+                }
+                if (ch == var_name && (str[index+1] < 'a' || str[index+1] > 'z') && (str[index+1] < 'A' || str[index+1] > 'Z'))
+                {
+                    token.type = Token::var;
+                    ret.push_back(token);
+                    index++;
+                    break;
+                }
+                if (ch == 'j' && (str[index+1] < 'a' || str[index+1] > 'z') && (str[index+1] < 'A' || str[index+1] > 'Z'))
+                {
+                    token.type = Token::imag_unit;
+                    ret.push_back(token);
+                    index++;
+                    break;
+                }
+
+                *error_pos = index;
+                *error_msg = Str("В выражении могут встречаться только числа, мнимая единица `j`, переменная `", var_name, "`, скобки и операции.");
+                return 0;
+            }
+        }
+    }
+
+    static bool FinalizeTokenList(std::list<Token> &list, int *error_pos, std::string *error_msg)
+    {
+        std::vector<int> paren_stack;
+
+        auto it = list.begin(), prev = it;
+
+        while (it != list.end())
+        {
+            switch (it->type)
+            {
+              case Token::lparen:
+                paren_stack.push_back(it->starts_at);
+                [[fallthrough]];
+              case Token::num:
+              case Token::var:
+              case Token::imag_unit:
+                if (it != prev)
+                {
+                    if (prev->type != Token::lparen && prev->type != Token::op)
+                    {
+                        *error_pos = it->starts_at;
+                        *error_msg = "Пропущена операция.";
+                        return 0;
+                    }
+                }
+                break;
+              case Token::rparen:
+                if (paren_stack.empty())
+                {
+                    *error_pos = it->starts_at;
+                    *error_msg = "Лишняя закрывающая скобка.";
+                    return 0;
+                }
+                paren_stack.pop_back();
+                break;
+              case Token::op:
+                if ((it == prev || prev->type == Token::lparen || prev->type == Token::op) && (it->op_type == Token::plus || it->op_type == Token::minus))
+                {
+                    if (it->op_type == Token::plus)
+                    {
+                        it = list.erase(it);
+                    }
+                    else
+                    {
+                        Token new_token;
+                        new_token.starts_at = it->starts_at;
+                        new_token.op_type = Token::fake_mul;
+                        it = list.insert(it, new_token);
+                        new_token.type = Token::num;
+                        new_token.num_value = -1;
+                        it = list.insert(it, new_token);
+                    }
+                    break;
+                }
+                if (it == prev || prev->type == Token::op || prev->type == Token::lparen)
+                {
+                    *error_pos = it->starts_at;
+                    *error_msg = "Пропущено число или переменная.";
+                    return 0;
+                }
+                break;
+            }
+            prev = it;
+            it++;
+        }
+
+        if (paren_stack.size() > 0)
+        {
+            *error_pos = paren_stack.back();
+            *error_msg = "Скобка не закрыта.";
+            return 0;
+        }
+
+        return 1;
+    }
+
+
+    struct Element
+    {
+        enum Type {num, var, op};
+
+        Type type;
+
+        union
+        {
+            complex_t (*op_func)(complex_t, complex_t);
+            struct
+            {
+                long double real, imag;
+            }
+            num_value;
+        };
+    };
+
+    std::vector<Element> elements;
+
+
+    static bool ParseExpression(const std::list<Token> &tokens, std::vector<Element> *elems)
+    {
+        // Shunting-yard algorithm
+
+        std::vector<Token::Operator> op_stack;
+
+        for (const auto &token : tokens)
+        {
+            switch (token.type)
+            {
+              case Token::num:
+                {
+                    Element el;
+                    el.type = Element::num;
+                    el.num_value.real = token.num_value;
+                    el.num_value.imag = 0;
+                    elems->push_back(el);
+                }
+                break;
+              case Token::imag_unit:
+                {
+                    Element el;
+                    el.type = Element::num;
+                    el.num_value.real = 0;
+                    el.num_value.imag = 1;
+                    elems->push_back(el);
+                }
+                break;
+              case Token::var:
+                {
+                    Element el;
+                    el.type = Element::var;
+                    elems->push_back(el);
+                }
+                break;
+              case Token::op:
+                {
+                    int this_prec = Precedence(token.op_type);
+                    Element el;
+                    el.type = Element::op;
+                    while (op_stack.size() > 0 && op_stack.back() != Token::left_paren && (this_prec < Precedence(op_stack.back()) || (this_prec == Precedence(op_stack.back()) && !IsRightAssociative(token.op_type))))
+                    {
+                        el.op_func = OperatorFunc(op_stack.back());
+                        elems->push_back(el);
+                        op_stack.pop_back();
+                    }
+                    op_stack.push_back(token.op_type);
+                }
+                break;
+              case Token::lparen:
+                op_stack.push_back(Token::left_paren);
+                break;
+              case Token::rparen:
+                while (1)
+                {
+                    if (op_stack.empty())
+                        return 0;
+
+                    bool lparen_found = (op_stack.back() == Token::left_paren);
+                    if (!lparen_found)
+                    {
+                        Element el;
+                        el.type = Element::op;
+                        el.op_func = OperatorFunc(op_stack.back());
+                        elems->push_back(el);
+                    }
+                    op_stack.pop_back();
+
+                    if (lparen_found)
+                        break;
+                }
+                break;
+            }
+        }
+
+        while (op_stack.size() > 0)
+        {
+            if (op_stack.back() == Token::left_paren)
+                return 0;
+            Element el;
+            el.type = Element::op;
+            el.op_func = OperatorFunc(op_stack.back());
+            elems->push_back(el);
+            op_stack.pop_back();
+        }
+
+        return 1;
+    }
+
+  public:
+    Expression() {}
+    Expression(std::string str)
+    {
+        std::list<Expression::Token> tokens;
+        int err_pos;
+        std::string err_msg;
+
+        if (Tokenize(str, 's', &tokens, &err_pos, &err_msg) &&
+            FinalizeTokenList(tokens, &err_pos, &err_msg))
+        {
+            if (!ParseExpression(tokens, &elements))
+                throw std::runtime_error("Неправильное выражение.");
+        }
+        else
+        {
+            throw std::runtime_error(Str(std::string(err_pos, ' '), "^ ", err_msg));
+        }
+    }
+
+    complex_t Eval(complex_t variable)
+    {
+        std::vector<complex_t> stack;
+        for (const auto &elem : elements)
+        {
+            switch (elem.type)
+            {
+              case Element::num:
+                stack.push_back({elem.num_value.real, elem.num_value.imag});
+                break;
+              case Element::var:
+                stack.push_back(variable);
+                break;
+              case Element::op:
+                {
+                    if (stack.size() < 2)
+                        throw std::runtime_error("Ошибка при вычислении.");
+                    complex_t result = elem.op_func(stack[stack.size()-2], stack.back());
+                    stack.pop_back();
+                    stack.pop_back(); // Sic! We pop twice.
+                    stack.push_back(result);
+                }
+                break;
+            }
+        }
+
+        if (stack.size() != 1)
+            throw std::runtime_error("Ошибка при вычислении.");
+
+        return stack.front();
+    }
+};
+
 
 int main(int, char **)
 {
     Draw::Init();
 
-    float angle = 0;
+    Graphics::ClearColor(fvec3(1));
+    Graphics::Clear(Graphics::color);
+    for (imat2 m : {fmat2(1,0,0,1), fmat2(0,1,-1,0)})
+        for (int i = -4; i <= 4; i++)
+            Draw::Line(m /mul/ fvec2(i,4.25) * 60, m /mul/ fvec2(i,-4.25) * 60, fvec3(0.85));
+    r.Finish();
+    Draw::Accumulator::Overwrite();
+
+    Expression e("1 / (0.2 * s^2 - 0.7 * s + 1)");
+
+
     int time = 1;
 
     auto Tick = [&]
@@ -81,11 +539,8 @@ int main(int, char **)
         Draw::Accumulator::Return();
         for (int i = 0; i < 10; i++)
         {
-            float radius = std::pow(time++, 0.75);
-            angle += 0.25 / radius;
-            r.Quad(fmat2::rotate2D(angle) /mul/ fvec2(radius,0), ivec2(14)).tex(ivec2(1,1)).center().color(fvec3(0.9,0.4,0)).mix(0);
-            r.Quad(fmat2::rotate2D(angle+f_pi*2/3) /mul/ fvec2(radius,0), ivec2(14)).tex(ivec2(1,1)).center().color(fvec3(0,0.9,0.4)).mix(0);
-            r.Quad(fmat2::rotate2D(angle-f_pi*2/3) /mul/ fvec2(radius,0), ivec2(14)).tex(ivec2(1,1)).center().color(fvec3(0.4,0,0.9)).mix(0);
+            auto pos = e.Eval({0, time++ / 100.});
+            Draw::Dot(fvec2(pos.real(), -pos.imag()) * 60 * 4, fvec3(0,0.4,0.9));
         }
         r.Finish();
         Draw::Accumulator::Overwrite();
