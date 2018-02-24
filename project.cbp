@@ -91,6 +91,9 @@
 			<Add directory="libs/win32" />
 		</Linker>
 		<Unit filename="libs/glfl.cpp" />
+		<Unit filename="libs/icon.rc">
+			<Option compilerVar="WINDRES" />
+		</Unit>
 		<Unit filename="src/events.cpp" />
 		<Unit filename="src/events.h" />
 		<Unit filename="src/everything.h">

@@ -1,8 +1,10 @@
 *.exe
 *.o
+*.res
 *.gch
 *.depend
 *.layout
+
 bin/tau++
 
 #Clion
