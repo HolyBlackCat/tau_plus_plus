@@ -80,9 +80,10 @@ namespace Draw
 
 class Expression
 {
+  public:
     using complex_t = std::complex<long double>;
 
-  public:
+  private:
     struct Token
     {
         enum Type {num, lparen, rparen, op, var, imag_unit};
@@ -529,17 +530,14 @@ int main(int, char **)
     r.Finish();
     Draw::Accumulator::Overwrite();
 
-    Expression e("1 / (0.2 * s^2 - 0.7 * s + 1)");
-
-
-    int time = 1;
+    Expression e("(1+s+s^3*0.5) / (0.2 * s^4 - 0.7 * s + 1)");
 
     auto Tick = [&]
     {
         Draw::Accumulator::Return();
-        for (int i = 0; i < 10; i++)
+        for (int i = 0; i < 64; i++)
         {
-            auto pos = e.Eval({0, time++ / 100.});
+            auto pos = e.Eval(Expression::complex_t(0, std::exponential_distribution<long double>(1/3.)(Rand::Generator())));
             Draw::Dot(fvec2(pos.real(), -pos.imag()) * 60 * 4, fvec3(0,0.4,0.9));
         }
         r.Finish();
