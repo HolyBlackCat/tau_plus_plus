@@ -15,7 +15,9 @@ add_executable(__tau__
         src/program.cpp
         src/strings.cpp
         src/ui.cpp
-        src/window.cpp)
+        src/window.cpp
+        libs/icon.rc
+        )
 
 target_link_libraries(__tau__
         mingw32
