@@ -48,10 +48,14 @@ namespace Draw
         }
     }
 
+    ivec2 min, max;
+
     void HandleResize()
     {
-        ivec2 a = -win.Size() / 2, b = win.Size() + a;
-        r.SetMatrix(fmat4::ortho(ivec2(a.x, b.y), ivec2(b.x, a.y), -1, 1));
+        min = -win.Size() / 2;
+        max = win.Size() + min;
+
+        r.SetMatrix(fmat4::ortho(ivec2(min.x, max.y), ivec2(max.x, min.y), -1, 1));
         mouse.Transform(win.Size()/2, 1);
     }
 
@@ -62,7 +66,7 @@ namespace Draw
 
         Graphics::Image texture_image_main("assets/texture.png");
 
-        font_object_main.Create("assets/FreeSerif.ttf", 20);
+        font_object_main.Create("assets/Xolonium-Regular.ttf", 20);
 
         Graphics::Font::MakeAtlas(texture_image_main, ivec2(0,1024-64), ivec2(1024,64),
         {
@@ -358,6 +362,13 @@ class Expression
             it++;
         }
 
+        if (list.size() && list.back().type == Token::op)
+        {
+            *error_pos = list.back().starts_at;
+            *error_msg = "Пропущено число или переменная.";
+            return 0;
+        }
+
         if (paren_stack.size() > 0)
         {
             *error_pos = paren_stack.back();
@@ -561,6 +572,9 @@ class Plot
     bool grabbed = 0;
     ivec2 grab_offset = ivec2(0);
 
+    bool scale_changed_this_tick = 0,
+         scale_changed_prev_tick = 1;
+
 
     struct PointData
     {
@@ -622,8 +636,14 @@ class Plot
             ldvec2 pos = (point.pos + offset) * scale;
             if ((abs(pos) > win.Size()).any())
                 continue;
-            Draw::Dot(grabbed, pos, fvec3(0,0.4,0.9));
+            Draw::Dot(grabbed || scale_changed_this_tick, pos, fvec3(0,0.4,0.9));
         }
+        r.Finish();
+
+        if (!scale_changed_this_tick && scale_changed_prev_tick)
+            ResetAccumulator();
+        scale_changed_prev_tick = scale_changed_this_tick;
+        scale_changed_this_tick = 0;
     }
 
     void RecalculateDefaultOffsetAndScale()
@@ -658,6 +678,12 @@ class Plot
             default_scale = ldvec2(default_scale.min());
     }
 
+    void ResetAccumulator()
+    {
+        Graphics::Clear(Graphics::color);
+        Draw::Accumulator::Overwrite();
+    }
+
     void Grab()
     {
         grabbed = 1;
@@ -670,8 +696,9 @@ class Plot
         if (flags & lock_scale_ratio)
             scale.x = scale.y;
 
-        Graphics::Clear(Graphics::color);
-        Draw::Accumulator::Overwrite();
+        scale_changed_this_tick = 1;
+
+        ResetAccumulator();
     }
 
     void ResetOffsetAndScale()
@@ -679,19 +706,23 @@ class Plot
         offset = default_offset;
         scale = default_scale;
 
-        Graphics::Clear(Graphics::color);
-        Draw::Accumulator::Overwrite();
+        scale_changed_this_tick = 1;
+
+        ResetAccumulator();
     }
 };
 
 
 class Button
 {
+    inline static std::string current_tooltip;
+
     ivec2 location = ivec2(0);
     ivec2 pos = ivec2(0);
     int icon_index = 0;
     bool visible = 0;
     bool holdable = 0;
+    std::string tooltip;
     std::function<void(void)> func;
 
     bool pressed = 0, hovered = 0;
@@ -703,8 +734,8 @@ class Button
 
   public:
     Button() {}
-    Button(ivec2 location, ivec2 pos, int icon_index, bool holdable, std::function<void(void)> func)
-        : location(location), pos(pos), icon_index(icon_index), visible(1), holdable(holdable), func(std::move(func)) {}
+    Button(ivec2 location, ivec2 pos, int icon_index, bool holdable, std::string tooltip, std::function<void(void)> func)
+        : location(location), pos(pos), icon_index(icon_index), visible(1), holdable(holdable), tooltip(tooltip), func(std::move(func)) {}
 
     void Tick(bool &button_pressed)
     {
@@ -719,6 +750,9 @@ class Button
 
         ivec2 screen_pos = ScreenPos();
         hovered = (mouse.pos() >= screen_pos - half_extent).all() && (mouse.pos() < screen_pos + half_extent).all();
+
+        if (hovered)
+            current_tooltip = tooltip;
 
         if (hovered && button_pressed)
         {
@@ -747,6 +781,15 @@ class Button
         r.Quad(screen_pos.add_y(pressed * pressed_offset), ivec2(48)).tex(ivec2(48*hovered, 32)).center();
         // Icon
         r.Quad(screen_pos.add_y(pressed * pressed_offset), ivec2(48)).tex(ivec2(48*icon_index, 80)).center();
+    }
+
+    static const std::string &CurrentTooltip()
+    {
+        return current_tooltip;
+    }
+    static void ResetTooltip()
+    {
+        current_tooltip = "";
     }
 };
 
@@ -779,16 +822,17 @@ int main(int, char **)
           case ButtonCategory::scale:
             {
                 int x = -32;
-                buttons.push_back(Button(ivec2(1,-1), ivec2(x,32), 0, 0, [&]{plot.ResetOffsetAndScale();})); // Reset offset and scale
+                buttons.push_back(Button(ivec2(1,-1), ivec2(x,32), 0, 0, "Сбросить расположение графика", [&]{plot.ResetOffsetAndScale();})); // Reset offset and scale
+                x -= 48+8;
+                buttons.push_back(Button(ivec2(1,-1), ivec2(x,32), 6, 1, "Уменьшить масштаб по оси Y", [&]{plot.Scale(ldvec2(1,1/scale_factor));})); // Decrease Y scale
                 x -= 48;
-                buttons.push_back(Button(ivec2(1,-1), ivec2(x,32), 6, 1, [&]{plot.Scale(ldvec2(1,1/scale_factor));})); // Decrease Y scale
+                buttons.push_back(Button(ivec2(1,-1), ivec2(x,32), 5, 1, "Увеличить масштаб по оси Y", [&]{plot.Scale(ldvec2(1,scale_factor));})); // Increase Y scale
+                x -= 48+8;
+                buttons.push_back(Button(ivec2(1,-1), ivec2(x,32), 4, 1, "Уменьшить масштаб по оси X", [&]{plot.Scale(ldvec2(1/scale_factor,1));})); // Decrease X scale
                 x -= 48;
-                buttons.push_back(Button(ivec2(1,-1), ivec2(x,32), 5, 1, [&]{plot.Scale(ldvec2(1,scale_factor));})); // Increase Y scale
-                x -= 48;
-                buttons.push_back(Button(ivec2(1,-1), ivec2(x,32), 4, 1, [&]{plot.Scale(ldvec2(1/scale_factor,1));})); // Decrease X scale
-                x -= 48;
-                buttons.push_back(Button(ivec2(1,-1), ivec2(x,32), 3, 1, [&]{plot.Scale(ldvec2(scale_factor,1));})); // Increase X scale
+                buttons.push_back(Button(ivec2(1,-1), ivec2(x,32), 3, 1, "Увеличить масштаб по оси X", [&]{plot.Scale(ldvec2(scale_factor,1));})); // Increase X scale
             }
+            break;
         }
     };
     AddButtonCategory(ButtonCategory::scale);
@@ -799,15 +843,15 @@ int main(int, char **)
 
         bool button_pressed = mouse.left.pressed();
 
+        Button::ResetTooltip();
         for (auto &button : buttons)
             button.Tick(button_pressed);
 
         if (button_pressed)
             plot.Grab();
 
-        plot.Tick(64);
+        plot.Tick(128);
 
-        r.Finish();
         Draw::Accumulator::Overwrite();
     };
     auto Render = [&]
@@ -816,6 +860,16 @@ int main(int, char **)
 
         for (const auto &button : buttons)
             button.Render();
+
+        { // Button tooltips
+            if (Button::CurrentTooltip().size() > 0)
+            {
+                constexpr int tooltip_box_height = 32;
+                r.Quad(ivec2(Draw::min.x, Draw::max.y - tooltip_box_height), ivec2(win.Size().x, tooltip_box_height)).color(fvec3(0.95));
+                r.Quad(ivec2(Draw::min.x, Draw::max.y - tooltip_box_height), ivec2(win.Size().x, 1)).color(fvec3(0.3));
+                r.Text(ivec2(0, Draw::max.y - tooltip_box_height/2), Button::CurrentTooltip()).color(fvec3(0));
+            }
+        }
     };
 
     uint64_t frame_start = Timing::Clock();
