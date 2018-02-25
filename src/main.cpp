@@ -14,7 +14,9 @@ Input::Mouse mouse;
 
 Graphics::Texture tex_main(Graphics::Texture::linear);
 Graphics::CharMap font_main;
+Graphics::CharMap font_small;
 Graphics::Font font_object_main;
+Graphics::Font font_object_small;
 
 
 namespace Draw
@@ -67,10 +69,12 @@ namespace Draw
         Graphics::Image texture_image_main("assets/texture.png");
 
         font_object_main.Create("assets/Xolonium-Regular.ttf", 20);
+        font_object_small.Create("assets/Xolonium-Regular.ttf", 11);
 
         Graphics::Font::MakeAtlas(texture_image_main, ivec2(0,1024-64), ivec2(1024,64),
         {
-            {font_object_main, font_main, Graphics::Font::normal, Strings::Encodings::cp1251()},
+            {font_object_main , font_main , Graphics::Font::normal, Strings::Encodings::cp1251()},
+            {font_object_small, font_small, Graphics::Font::normal, Strings::Encodings::cp1251()},
         });
 
         tex_main.SetData(texture_image_main);
@@ -557,6 +561,18 @@ class Plot
 {
     static constexpr float window_margin = 0.4;
 
+    static constexpr ivec2 min_grid_cell_pixel_size = ivec2(96),
+                           grid_number_offset_h = ivec2(8,0),
+                           grid_number_offset_v = ivec2(3,-8);
+
+    static constexpr fvec3 grid_line_color = fvec3(0.75),
+                           grid_zero_line_color = fvec3(0.3),
+                           grid_small_line_color = fvec3(0.85),
+                           grid_text_color = fvec3(0);
+
+    static constexpr int grid_number_max_precision = 8;
+
+
     using func_t = std::function<ldvec2(long double)>;
     using distr_t = std::exponential_distribution<long double>;
 
@@ -568,6 +584,9 @@ class Plot
     ldvec2 default_offset = ivec2(0);
     ldvec2 default_scale = ldvec2(1);
     mutable distr_t distr{1};
+
+    ldvec2 grid_scale_step_factor = ivec2(2);
+    ivec2 grid_cell_segments = ivec2(4);
 
     bool grabbed = 0;
     ivec2 grab_offset = ivec2(0);
@@ -617,13 +636,12 @@ class Plot
         // Move if needed
         if (grabbed)
         {
-            Graphics::Clear(Graphics::color);
-            Draw::Accumulator::Overwrite();
+            if (mouse.left.up())
+                grabbed = 0;
 
             offset = (mouse.pos() - grab_offset) / scale;
 
-            if (mouse.left.up())
-                grabbed = 0;
+            ResetAccumulator();
         }
 
         // Draw points
@@ -681,6 +699,144 @@ class Plot
     void ResetAccumulator()
     {
         Graphics::Clear(Graphics::color);
+
+        { // Draw grid
+            ldvec2 visible_size = win.Size() / scale;
+            ldvec2 corner = -offset - visible_size/2;
+
+            ldvec2 min_cell_size = min_grid_cell_pixel_size / scale;
+            ldvec2 cell_size;
+
+            for (auto mem : {&ldvec2::x, &ldvec2::y})
+                cell_size.*mem = std::pow(grid_scale_step_factor.*mem, ceil(std::log(min_cell_size.*mem) / std::log(grid_scale_step_factor.*mem)));
+
+            ivec2 line_count = iround(ceil(visible_size / cell_size)) + 1;
+
+            ldvec2 first_cell_pos = floor(corner / cell_size) * cell_size;
+
+            auto lambda = [&](int step, long double ldvec2::*ld_a, long double ldvec2::*ld_b, int ivec2::*int_a, int ivec2::*int_b)
+            {
+                (void)ld_b;
+
+                bool vertical = ld_a == &ldvec2::x;
+
+                switch (step)
+                {
+                  case 0: // Small lines
+                    {
+                        for (int i = 0; i < line_count.*int_a * grid_cell_segments.*int_a; i++)
+                        {
+                            bool big_line = i % grid_cell_segments.*int_a == 0;
+
+                            if (big_line && step == 0)
+                                continue;
+
+                            long double value = first_cell_pos.*ld_a + i * cell_size.*ld_a / grid_cell_segments.*int_a;
+
+                            ivec2 pixel_pos;
+                            pixel_pos.*int_a = iround((value + offset.*ld_a) * scale.*ld_a);
+                            pixel_pos.*int_b = Draw::min.*int_b;
+
+                            ivec2 pixel_size;
+                            pixel_size.*int_a = 1;
+                            pixel_size.*int_b = win.Size().*int_b;
+
+                            r.Quad(pixel_pos, pixel_size).color(grid_small_line_color);
+                        }
+                    }
+                    break;
+                  case 1: // Big lines
+                  case 3: // Text
+                    {
+                        int number_precision;
+
+                        if (step != 1)
+                        {
+                            for (number_precision = 0; number_precision < grid_number_max_precision; number_precision++)
+                            {
+                                std::string prev_str;
+
+                                bool need_more_precision = 0;
+
+                                for (int i = 0; i < line_count.*int_a * grid_cell_segments.*int_a; i++)
+                                {
+                                    long double value = first_cell_pos.*ld_a + i * cell_size.*ld_a / grid_cell_segments.*int_a;
+
+                                    char cur_str_buf[grid_number_max_precision * 3 / 2];
+
+                                    std::snprintf(cur_str_buf, sizeof cur_str_buf, "%.*Lg", number_precision, value);
+                                    std::string cur_str = cur_str_buf;
+
+                                    if (cur_str != prev_str)
+                                    {
+                                        need_more_precision = 1;
+                                        break;
+                                    }
+                                }
+
+                                if (!need_more_precision)
+                                    break;
+                            }
+                        }
+
+                        for (int i = 0; i < line_count.*int_a; i++)
+                        {
+                            long double value = first_cell_pos.*ld_a + i * cell_size.*ld_a;
+
+                            bool zero = abs(value) < cell_size.*ld_a / 2;
+                            if (zero && step == 1)
+                                continue;
+
+                            ivec2 pixel_pos;
+                            pixel_pos.*int_a = iround((value + offset.*ld_a) * scale.*ld_a);
+                            pixel_pos.*int_b = Draw::min.*int_b;
+
+                            ivec2 pixel_size;
+                            pixel_size.*int_a = 2;
+                            pixel_size.*int_b = win.Size().*int_b;
+
+                            if (step == 1)
+                            { // Line
+                                r.Quad(pixel_pos, pixel_size).color(grid_line_color);
+                            }
+                            else
+                            { // Number
+                                pixel_pos.*int_b = (vertical ? Draw::max.*int_b : Draw::min.*int_b);
+                                pixel_pos += (vertical ? grid_number_offset_v : grid_number_offset_h);
+
+                                char string_buf[grid_number_max_precision * 3 / 2];
+                                std::snprintf(string_buf, sizeof string_buf, "%.*Lg", number_precision, value);
+
+                                r.Text(pixel_pos, string_buf).align(ivec2(-1,1)).font(font_small).color(grid_text_color);
+                            }
+                        }
+                    }
+                    break;
+                  case 2: // Zero lines
+                    {
+                        ivec2 pixel_pos;
+                        pixel_pos.*int_a = iround(offset.*ld_a * scale.*ld_a);
+                        pixel_pos.*int_b = Draw::min.*int_b;
+
+                        ivec2 pixel_size;
+                        pixel_size.*int_a = 2;
+                        pixel_size.*int_b = win.Size().*int_b;
+
+                        r.Quad(pixel_pos, pixel_size).color(grid_zero_line_color);
+                    }
+                    break;
+                }
+            };
+
+            for (int i = 0; i < 4; i++)
+            {
+                lambda(i, &ldvec2::x, &ldvec2::y, &ivec2::x, &ivec2::y);
+                lambda(i, &ldvec2::y, &ldvec2::x, &ivec2::y, &ivec2::x);
+            }
+
+            r.Finish();
+        }
+
         Draw::Accumulator::Overwrite();
     }
 
@@ -709,6 +865,15 @@ class Plot
         scale_changed_this_tick = 1;
 
         ResetAccumulator();
+    }
+
+    void SetGridScaleStepFactor(ldvec2 value)
+    {
+        grid_scale_step_factor = value;
+    }
+    void SetGridCellSegments(ivec2 value)
+    {
+        grid_cell_segments = value;
     }
 };
 
@@ -815,7 +980,7 @@ int main(int, char **)
 
     auto AddButtonCategory = [&](ButtonCategory category)
     {
-        constexpr float scale_factor = 1.015;
+        constexpr float scale_factor = 1.01;
 
         switch (category)
         {
@@ -862,12 +1027,18 @@ int main(int, char **)
             button.Render();
 
         { // Button tooltips
+            constexpr int tooltip_box_height = 32,
+                          tooltip_box_gap = 32;
+            constexpr fvec3 tooltip_box_line_color = fvec3(0.3),
+                            tooltip_box_fill_color = fvec3(0.95),
+                            tooltip_box_text_color = fvec3(0);
+
             if (Button::CurrentTooltip().size() > 0)
             {
-                constexpr int tooltip_box_height = 32;
-                r.Quad(ivec2(Draw::min.x, Draw::max.y - tooltip_box_height), ivec2(win.Size().x, tooltip_box_height)).color(fvec3(0.95));
-                r.Quad(ivec2(Draw::min.x, Draw::max.y - tooltip_box_height), ivec2(win.Size().x, 1)).color(fvec3(0.3));
-                r.Text(ivec2(0, Draw::max.y - tooltip_box_height/2), Button::CurrentTooltip()).color(fvec3(0));
+                r.Quad(ivec2(Draw::min.x, Draw::max.y - tooltip_box_height - tooltip_box_gap), ivec2(win.Size().x, tooltip_box_height)).color(tooltip_box_fill_color);
+                r.Quad(ivec2(Draw::min.x, Draw::max.y - tooltip_box_height - tooltip_box_gap), ivec2(win.Size().x, 1)).color(tooltip_box_line_color);
+                r.Quad(ivec2(Draw::min.x, Draw::max.y - tooltip_box_height), ivec2(win.Size().x, 1)).color(tooltip_box_line_color);
+                r.Text(ivec2(0, Draw::max.y - tooltip_box_height/2 - tooltip_box_gap), Button::CurrentTooltip()).color(tooltip_box_text_color);
             }
         }
     };
@@ -886,10 +1057,10 @@ int main(int, char **)
             {
                 win.size_changed = 0;
                 Graphics::Viewport(win.Size());
-                Graphics::Clear(Graphics::color);
                 Draw::Accumulator::Overwrite();
                 Draw::HandleResize();
                 plot.RecalculateDefaultOffsetAndScale();
+                plot.ResetAccumulator();
             }
             Tick();
         }
