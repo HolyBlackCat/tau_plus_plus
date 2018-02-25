@@ -37,6 +37,15 @@ namespace Draw
         {
             glAccum(GL_RETURN, 1);
         }
+
+        void ModifyAdd(float value)
+        {
+            glAccum(GL_ADD, value);
+        }
+        void ModifyMul(float value)
+        {
+            glAccum(GL_MULT, value);
+        }
     }
 
     void Init()
@@ -466,13 +475,13 @@ class Expression
 
   public:
     Expression() {}
-    Expression(std::string str)
+    Expression(std::string str, char var = 's')
     {
         std::list<Expression::Token> tokens;
         int err_pos;
         std::string err_msg;
 
-        if (Tokenize(str, 's', &tokens, &err_pos, &err_msg) &&
+        if (Tokenize(str, var, &tokens, &err_pos, &err_msg) &&
             FinalizeTokenList(tokens, &err_pos, &err_msg))
         {
             if (!ParseExpression(tokens, &elements))
@@ -484,7 +493,12 @@ class Expression
         }
     }
 
-    complex_t Eval(complex_t variable)
+    explicit operator bool() const
+    {
+        return elements.size() > 0;
+    }
+
+    complex_t Eval(complex_t variable) const
     {
         std::vector<complex_t> stack;
         for (const auto &elem : elements)
@@ -515,6 +529,168 @@ class Expression
 
         return stack.front();
     }
+    ldvec2 EvalVec(complex_t variable) const
+    {
+        auto val = Eval(variable);
+        return {val.real(), val.imag()};
+    }
+};
+
+
+class Plot
+{
+    static constexpr float window_margin = 0.4;
+
+    using func_t = std::function<ldvec2(long double)>;
+    using distr_t = std::exponential_distribution<long double>;
+
+    func_t func;
+    int flags;
+
+    ldvec2 offset = ivec2(0);
+    ldvec2 scale = ivec2(1);
+    mutable distr_t distr{1};
+
+    static constexpr long double movement_speed_cap = 3.5, movement_acc = 0.5,
+                                 scale_speed_cap = 0.01, scale_acc = 0.005;
+    ldvec2 offset_vel = ivec2(0);
+    ldvec2 scale_vel = ivec2(0);
+
+    ivec2 control = ivec2(0), prev_control = ivec2(0),
+          scale_control = ivec2(0), prev_scale_control = ivec2(0);
+
+
+    struct PointData
+    {
+        bool valid;
+        ldvec2 pos;
+    };
+
+    PointData Point(long double freq) const
+    {
+        PointData ret;
+        ret.pos = func(freq);
+        ret.valid = std::isfinite(ret.pos.x) && std::isfinite(ret.pos.y);
+        ret.pos.y = -ret.pos.y;
+        return ret;
+    }
+
+  public:
+    enum Flags {lock_scale_ratio = 1};
+
+    Plot() {}
+    Plot(func_t func, int flags = 0) : func(std::move(func)), flags(flags)
+    {
+        ldvec2 box_min(0), box_max(0);
+
+        for (int i = 0; i <= 64; i++)
+        {
+            long double freq = i / 4.l;
+            auto point = Point(freq);
+            if (!point.valid)
+                continue;
+
+            for (auto mem : {&ldvec2::x, &ldvec2::y})
+            {
+                if (point.pos.*mem < box_min.*mem)
+                    box_min.*mem = point.pos.*mem;
+                else if (point.pos.*mem > box_max.*mem)
+                    box_max.*mem = point.pos.*mem;
+            }
+        }
+
+        for (auto mem : {&ldvec2::x, &ldvec2::y})
+        {
+            offset.*mem = (box_min.*mem + box_max.*mem) / -2;
+            if (box_min.*mem == box_max.*mem)
+                continue;
+            scale.*mem = (ldvec2(win.Size()).*mem * (1-window_margin)) / (box_max.*mem - box_min.*mem);
+        }
+
+        if (flags & lock_scale_ratio)
+            scale = ldvec2(scale.min());
+    }
+
+    void SetMeanFreq(long double freq)
+    {
+        distr = distr_t(1.l / freq);
+    }
+
+    explicit operator bool() const
+    {
+        return bool(func);
+    }
+
+    void Tick(int point_count)
+    {
+        // Load accumulator
+        Draw::Accumulator::Return();
+
+        { // Move plot if needed
+            prev_control = control;
+            prev_scale_control = scale_control;
+
+            ivec2 arrows(Keys::right.down() - Keys::left.down(), Keys::down.down() - Keys::up.down());
+
+            if (Keys::l_shift.up())
+            {
+                control = arrows;
+                scale_control = ivec2(0);
+            }
+            else
+            {
+                control = ivec2(0);
+                scale_control = arrows * ivec2(1,-1);
+                if (flags & lock_scale_ratio)
+                    scale_control.x = scale_control.y;
+            }
+
+            if (control.x == 0) offset_vel.x = 0;
+            if (control.y == 0) offset_vel.y = 0;
+            clamp_assign(offset_vel += control * movement_acc, ldvec2(-movement_speed_cap), ldvec2(movement_speed_cap));
+            if (control.x) offset.x += offset_vel.x / scale.x;
+            if (control.y) offset.y += offset_vel.y / scale.y;
+
+
+            if (scale_control.x == 0) scale_vel.x = 0;
+            if (scale_control.y == 0) scale_vel.y = 0;
+            clamp_assign(scale_vel += scale_control * scale_acc, ldvec2(-scale_speed_cap), ldvec2(scale_speed_cap));
+            if (scale_control.x) scale.x *= std::pow(2, scale_vel.x);
+            if (scale_control.y) scale.y *= std::pow(2, scale_vel.y);
+
+            if (flags & lock_scale_ratio)
+                scale.x = scale.y;
+        }
+
+        { // Draw points
+            while (point_count-- > 0)
+            {
+                long double freq = distr(Rand::Generator());
+                auto point = Point(freq);
+                if (!point.valid)
+                    continue;
+                ldvec2 pos = (point.pos + offset) * scale;
+                if ((abs(pos) > win.Size()).any())
+                    continue;
+                Draw::Dot(pos, fvec3(0,0.4,0.9));
+            }
+            r.Finish();
+        }
+
+        // Save to accumulator
+        Draw::Accumulator::Overwrite();
+
+        if (control.any() || scale_control.any()) // Lighten accumulator if plot was moved
+        {
+            Draw::Accumulator::ModifyMul(0.81);
+            Draw::Accumulator::ModifyAdd(0.2);
+        }
+        if ((control.none() && prev_control.any()) || (scale_control.none() && prev_scale_control.any())) // Clear accumulator if stopped moving
+        {
+            Graphics::Clear(Graphics::color);
+            Draw::Accumulator::Overwrite();
+        }
+    }
 };
 
 
@@ -524,29 +700,23 @@ int main(int, char **)
 
     Graphics::ClearColor(fvec3(1));
     Graphics::Clear(Graphics::color);
-    for (imat2 m : {fmat2(1,0,0,1), fmat2(0,1,-1,0)})
-        for (int i = -4; i <= 4; i++)
-            Draw::Line(m /mul/ fvec2(i,4.25) * 60, m /mul/ fvec2(i,-4.25) * 60, fvec3(0.85));
-    r.Finish();
+//    for (imat2 m : {fmat2(1,0,0,1), fmat2(0,1,-1,0)})
+//        for (int i = -4; i <= 4; i++)
+//            Draw::Line(m /mul/ fvec2(i,4.25) * 60, m /mul/ fvec2(i,-4.25) * 60, fvec3(0.85));
+//    r.Finish();
     Draw::Accumulator::Overwrite();
 
     Expression e("(1+s+s^3*0.5) / (0.2 * s^4 - 0.7 * s + 1)");
+    Plot plot([e](long double t){return e.EvalVec({0,t});});
 
     auto Tick = [&]
     {
-        Draw::Accumulator::Return();
-        for (int i = 0; i < 64; i++)
-        {
-            auto pos = e.Eval(Expression::complex_t(0, std::exponential_distribution<long double>(1/3.)(Rand::Generator())));
-            Draw::Dot(fvec2(pos.real(), -pos.imag()) * 60 * 4, fvec3(0,0.4,0.9));
-        }
-        r.Finish();
-        Draw::Accumulator::Overwrite();
+        plot.Tick(64);
     };
     auto Render = [&]
     {
         Draw::Accumulator::Return();
-        //r.Text(mouse.pos(), "Hello, world!").color(fvec3(0)).scale(1);
+        r.Text(win.Size()/2 - 5, "Стрелки - перемещение\nShift+Стрелки - масштаб").color(fvec3(0)).align({1,1});
     };
 
     uint64_t frame_start = Timing::Clock();
