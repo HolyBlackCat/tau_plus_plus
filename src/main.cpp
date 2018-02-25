@@ -6,7 +6,7 @@
 
 Events::AutoErrorHandlers error_handlers;
 
-Window win("TAU++", ivec2(800,600), Window::Settings{}.GlVersion(2,1).GlProfile(Window::any_profile));
+Window win("TAU++", ivec2(800,600), Window::Settings{}.GlVersion(2,1).GlProfile(Window::any_profile).Resizable().MinSize(ivec2(640,480)));
 Timing::TickStabilizer tick_stabilizer(60);
 
 Renderers::Poly2D r;
@@ -48,6 +48,13 @@ namespace Draw
         }
     }
 
+    void HandleResize()
+    {
+        ivec2 a = -win.Size() / 2, b = win.Size() + a;
+        r.SetMatrix(fmat4::ortho(ivec2(a.x, b.y), ivec2(b.x, a.y), -1, 1));
+        mouse.Transform(win.Size()/2, 1);
+    }
+
     void Init()
     {
         Graphics::Blending::Enable();
@@ -66,23 +73,21 @@ namespace Draw
 
         r.Create(0x1000);
         r.SetTexture(tex_main);
-        r.SetMatrix(fmat4::ortho2D(win.Size() / ivec2(-2,2), win.Size() / ivec2(2,-2)));
         r.SetDefaultFont(font_main);
+        Draw::HandleResize();
         r.BindShader();
-
-        mouse.Transform(win.Size()/2, 1);
     }
 
-    void Dot(fvec2 pos, fvec3 color, float alpha = 1, float beta = 1)
+    void Dot(int type, fvec2 pos, fvec3 color, float alpha = 1, float beta = 1)
     {
-        r.Quad(pos, ivec2(14)).tex(ivec2(1,1)).center().color(color).mix(0).alpha(alpha).beta(beta);
+        r.Quad(pos, ivec2(14)).tex(ivec2(1 + 16 * type,1)).center().color(color).mix(0).alpha(alpha).beta(beta);
     }
-    void Line(fvec2 a, fvec2 b, fvec3 color, float alpha = 1, float beta = 1)
+    void Line(int type, fvec2 a, fvec2 b, fvec3 color, float alpha = 1, float beta = 1)
     {
         int len = iround((b - a).len());
 
         for (int i = 0; i <= len; i++)
-            Dot(a + (b - a) * i / len, color, alpha, beta);
+            Dot(type, a + (b - a) * i / len, color, alpha, beta);
     }
 }
 
@@ -549,15 +554,12 @@ class Plot
 
     ldvec2 offset = ivec2(0);
     ldvec2 scale = ivec2(1);
+    ldvec2 default_offset = ivec2(0);
+    ldvec2 default_scale = ldvec2(1);
     mutable distr_t distr{1};
 
-    static constexpr long double movement_speed_cap = 3.5, movement_acc = 0.5,
-                                 scale_speed_cap = 0.01, scale_acc = 0.005;
-    ldvec2 offset_vel = ivec2(0);
-    ldvec2 scale_vel = ivec2(0);
-
-    ivec2 control = ivec2(0), prev_control = ivec2(0),
-          scale_control = ivec2(0), prev_scale_control = ivec2(0);
+    bool grabbed = 0;
+    ivec2 grab_offset = ivec2(0);
 
 
     struct PointData
@@ -581,6 +583,51 @@ class Plot
     Plot() {}
     Plot(func_t func, int flags = 0) : func(std::move(func)), flags(flags)
     {
+        RecalculateDefaultOffsetAndScale();
+        offset = default_offset;
+        scale = default_scale;
+    }
+
+    void SetMeanFreq(long double freq)
+    {
+        distr = distr_t(1.l / freq);
+    }
+
+    explicit operator bool() const
+    {
+        return bool(func);
+    }
+
+    void Tick(int count)
+    {
+        // Move if needed
+        if (grabbed)
+        {
+            Graphics::Clear(Graphics::color);
+            Draw::Accumulator::Overwrite();
+
+            offset = (mouse.pos() - grab_offset) / scale;
+
+            if (mouse.left.up())
+                grabbed = 0;
+        }
+
+        // Draw points
+        while (count-- > 0)
+        {
+            long double freq = distr(Rand::Generator());
+            auto point = Point(freq);
+            if (!point.valid)
+                continue;
+            ldvec2 pos = (point.pos + offset) * scale;
+            if ((abs(pos) > win.Size()).any())
+                continue;
+            Draw::Dot(grabbed, pos, fvec3(0,0.4,0.9));
+        }
+    }
+
+    void RecalculateDefaultOffsetAndScale()
+    {
         ldvec2 box_min(0), box_max(0);
 
         for (int i = 0; i <= 64; i++)
@@ -601,95 +648,105 @@ class Plot
 
         for (auto mem : {&ldvec2::x, &ldvec2::y})
         {
-            offset.*mem = (box_min.*mem + box_max.*mem) / -2;
+            default_offset.*mem = (box_min.*mem + box_max.*mem) / -2;
             if (box_min.*mem == box_max.*mem)
                 continue;
-            scale.*mem = (ldvec2(win.Size()).*mem * (1-window_margin)) / (box_max.*mem - box_min.*mem);
+            default_scale.*mem = (ldvec2(win.Size()).*mem * (1-window_margin)) / (box_max.*mem - box_min.*mem);
         }
 
         if (flags & lock_scale_ratio)
-            scale = ldvec2(scale.min());
+            default_scale = ldvec2(default_scale.min());
     }
 
-    void SetMeanFreq(long double freq)
+    void Grab()
     {
-        distr = distr_t(1.l / freq);
+        grabbed = 1;
+        grab_offset = mouse.pos() - offset * scale;
     }
 
-    explicit operator bool() const
+    void Scale(ldvec2 scale_factor)
     {
-        return bool(func);
-    }
+        scale *= scale_factor;
+        if (flags & lock_scale_ratio)
+            scale.x = scale.y;
 
-    void Tick(int point_count)
-    {
-        // Load accumulator
-        Draw::Accumulator::Return();
-
-        { // Move plot if needed
-            prev_control = control;
-            prev_scale_control = scale_control;
-
-            ivec2 arrows(Keys::right.down() - Keys::left.down(), Keys::down.down() - Keys::up.down());
-
-            if (Keys::l_shift.up())
-            {
-                control = arrows;
-                scale_control = ivec2(0);
-            }
-            else
-            {
-                control = ivec2(0);
-                scale_control = arrows * ivec2(1,-1);
-                if (flags & lock_scale_ratio)
-                    scale_control.x = scale_control.y;
-            }
-
-            if (control.x == 0) offset_vel.x = 0;
-            if (control.y == 0) offset_vel.y = 0;
-            clamp_assign(offset_vel += control * movement_acc, ldvec2(-movement_speed_cap), ldvec2(movement_speed_cap));
-            if (control.x) offset.x += offset_vel.x / scale.x;
-            if (control.y) offset.y += offset_vel.y / scale.y;
-
-
-            if (scale_control.x == 0) scale_vel.x = 0;
-            if (scale_control.y == 0) scale_vel.y = 0;
-            clamp_assign(scale_vel += scale_control * scale_acc, ldvec2(-scale_speed_cap), ldvec2(scale_speed_cap));
-            if (scale_control.x) scale.x *= std::pow(2, scale_vel.x);
-            if (scale_control.y) scale.y *= std::pow(2, scale_vel.y);
-
-            if (flags & lock_scale_ratio)
-                scale.x = scale.y;
-        }
-
-        { // Draw points
-            while (point_count-- > 0)
-            {
-                long double freq = distr(Rand::Generator());
-                auto point = Point(freq);
-                if (!point.valid)
-                    continue;
-                ldvec2 pos = (point.pos + offset) * scale;
-                if ((abs(pos) > win.Size()).any())
-                    continue;
-                Draw::Dot(pos, fvec3(0,0.4,0.9));
-            }
-            r.Finish();
-        }
-
-        // Save to accumulator
+        Graphics::Clear(Graphics::color);
         Draw::Accumulator::Overwrite();
+    }
 
-        if (control.any() || scale_control.any()) // Lighten accumulator if plot was moved
+    void ResetOffsetAndScale()
+    {
+        offset = default_offset;
+        scale = default_scale;
+
+        Graphics::Clear(Graphics::color);
+        Draw::Accumulator::Overwrite();
+    }
+};
+
+
+class Button
+{
+    ivec2 location = ivec2(0);
+    ivec2 pos = ivec2(0);
+    int icon_index = 0;
+    bool visible = 0;
+    bool holdable = 0;
+    std::function<void(void)> func;
+
+    bool pressed = 0, hovered = 0;
+
+    ivec2 ScreenPos() const
+    {
+        return win.Size() * location / 2 + pos;
+    }
+
+  public:
+    Button() {}
+    Button(ivec2 location, ivec2 pos, int icon_index, bool holdable, std::function<void(void)> func)
+        : location(location), pos(pos), icon_index(icon_index), visible(1), holdable(holdable), func(std::move(func)) {}
+
+    void Tick(bool &button_pressed)
+    {
+        constexpr int half_extent = 24;
+
+        if (!visible)
         {
-            Draw::Accumulator::ModifyMul(0.81);
-            Draw::Accumulator::ModifyAdd(0.2);
+            pressed = 0;
+            hovered = 0;
+            return;
         }
-        if ((control.none() && prev_control.any()) || (scale_control.none() && prev_scale_control.any())) // Clear accumulator if stopped moving
+
+        ivec2 screen_pos = ScreenPos();
+        hovered = (mouse.pos() >= screen_pos - half_extent).all() && (mouse.pos() < screen_pos + half_extent).all();
+
+        if (hovered && button_pressed)
         {
-            Graphics::Clear(Graphics::color);
-            Draw::Accumulator::Overwrite();
+            button_pressed = 0;
+            pressed = 1;
+            if (!holdable)
+                func();
         }
+
+        if (pressed && holdable)
+            func();
+
+        if (!hovered || !mouse.left.down())
+            pressed = 0;
+    }
+    void Render() const
+    {
+        constexpr int pressed_offset = 2;
+
+        if (!visible)
+            return;
+
+        ivec2 screen_pos = ScreenPos();
+
+        // Button itself
+        r.Quad(screen_pos.add_y(pressed * pressed_offset), ivec2(48)).tex(ivec2(48*hovered, 32)).center();
+        // Icon
+        r.Quad(screen_pos.add_y(pressed * pressed_offset), ivec2(48)).tex(ivec2(48*icon_index, 80)).center();
     }
 };
 
@@ -709,14 +766,56 @@ int main(int, char **)
     Expression e("(1+s+s^3*0.5) / (0.2 * s^4 - 0.7 * s + 1)");
     Plot plot([e](long double t){return e.EvalVec({0,t});});
 
+    std::vector<Button> buttons;
+
+    enum class ButtonCategory {scale};
+
+    auto AddButtonCategory = [&](ButtonCategory category)
+    {
+        constexpr float scale_factor = 1.015;
+
+        switch (category)
+        {
+          case ButtonCategory::scale:
+            {
+                int x = -32;
+                buttons.push_back(Button(ivec2(1,-1), ivec2(x,32), 0, 0, [&]{plot.ResetOffsetAndScale();})); // Reset offset and scale
+                x -= 48;
+                buttons.push_back(Button(ivec2(1,-1), ivec2(x,32), 6, 1, [&]{plot.Scale(ldvec2(1,1/scale_factor));})); // Decrease Y scale
+                x -= 48;
+                buttons.push_back(Button(ivec2(1,-1), ivec2(x,32), 5, 1, [&]{plot.Scale(ldvec2(1,scale_factor));})); // Increase Y scale
+                x -= 48;
+                buttons.push_back(Button(ivec2(1,-1), ivec2(x,32), 4, 1, [&]{plot.Scale(ldvec2(1/scale_factor,1));})); // Decrease X scale
+                x -= 48;
+                buttons.push_back(Button(ivec2(1,-1), ivec2(x,32), 3, 1, [&]{plot.Scale(ldvec2(scale_factor,1));})); // Increase X scale
+            }
+        }
+    };
+    AddButtonCategory(ButtonCategory::scale);
+
     auto Tick = [&]
     {
+        Draw::Accumulator::Return();
+
+        bool button_pressed = mouse.left.pressed();
+
+        for (auto &button : buttons)
+            button.Tick(button_pressed);
+
+        if (button_pressed)
+            plot.Grab();
+
         plot.Tick(64);
+
+        r.Finish();
+        Draw::Accumulator::Overwrite();
     };
     auto Render = [&]
     {
         Draw::Accumulator::Return();
-        r.Text(win.Size()/2 - 5, "Стрелки - перемещение\nShift+Стрелки - масштаб").color(fvec3(0)).align({1,1});
+
+        for (const auto &button : buttons)
+            button.Render();
     };
 
     uint64_t frame_start = Timing::Clock();
@@ -733,6 +832,10 @@ int main(int, char **)
             {
                 win.size_changed = 0;
                 Graphics::Viewport(win.Size());
+                Graphics::Clear(Graphics::color);
+                Draw::Accumulator::Overwrite();
+                Draw::HandleResize();
+                plot.RecalculateDefaultOffsetAndScale();
             }
             Tick();
         }
