@@ -71,7 +71,7 @@ namespace Draw
         font_object_main.Create("assets/Xolonium-Regular.ttf", 20);
         font_object_small.Create("assets/Xolonium-Regular.ttf", 11);
 
-        Graphics::Font::MakeAtlas(texture_image_main, ivec2(0,1024-64), ivec2(1024,64),
+        Graphics::Font::MakeAtlas(texture_image_main, ivec2(0,1024-128), ivec2(1024,128),
         {
             {font_object_main , font_main , Graphics::Font::normal, Strings::Encodings::cp1251()},
             {font_object_small, font_small, Graphics::Font::normal, Strings::Encodings::cp1251()},
