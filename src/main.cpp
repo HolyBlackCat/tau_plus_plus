@@ -570,7 +570,7 @@ class Plot
                            grid_small_line_color = fvec3(0.85),
                            grid_text_color = fvec3(0);
 
-    static constexpr int grid_number_max_precision = 8;
+    static constexpr int grid_number_precision = 8;
 
 
     using func_t = std::function<ldvec2(long double)>;
@@ -585,7 +585,7 @@ class Plot
     ldvec2 default_scale = ldvec2(1);
     mutable distr_t distr{1};
 
-    ldvec2 grid_scale_step_factor = ivec2(2);
+    ldvec2 grid_scale_step_factor = ldvec2(2);
     ivec2 grid_cell_segments = ivec2(4);
 
     bool grabbed = 0;
@@ -714,128 +714,63 @@ class Plot
 
             ldvec2 first_cell_pos = floor(corner / cell_size) * cell_size;
 
-            auto lambda = [&](int step, long double ldvec2::*ld_a, long double ldvec2::*ld_b, int ivec2::*int_a, int ivec2::*int_b)
+            auto lambda = [&](bool text, long double ldvec2::*ld_a, long double ldvec2::*ld_b, int ivec2::*int_a, int ivec2::*int_b)
             {
                 (void)ld_b;
 
                 bool vertical = ld_a == &ldvec2::x;
 
-                switch (step)
+                for (int i = 0; i < line_count.*int_a * grid_cell_segments.*int_a; i++)
                 {
-                  case 0: // Small lines
-                    {
-                        for (int i = 0; i < line_count.*int_a * grid_cell_segments.*int_a; i++)
-                        {
-                            bool big_line = i % grid_cell_segments.*int_a == 0;
+                    bool big_line = i % grid_cell_segments.*int_a == 0;
 
-                            if (big_line && step == 0)
-                                continue;
+                    long double value = first_cell_pos.*ld_a + i * cell_size.*ld_a / grid_cell_segments.*int_a;
 
-                            long double value = first_cell_pos.*ld_a + i * cell_size.*ld_a / grid_cell_segments.*int_a;
+                    bool zero = abs(value) < cell_size.*ld_a / grid_cell_segments.*int_a / 2;
 
-                            ivec2 pixel_pos;
-                            pixel_pos.*int_a = iround((value + offset.*ld_a) * scale.*ld_a);
-                            pixel_pos.*int_b = Draw::min.*int_b;
+                    ivec2 pixel_pos;
+                    pixel_pos.*int_a = iround((value + offset.*ld_a) * scale.*ld_a);
+                    pixel_pos.*int_b = Draw::min.*int_b;
 
-                            ivec2 pixel_size;
-                            pixel_size.*int_a = 1;
-                            pixel_size.*int_b = win.Size().*int_b;
+                    ivec2 pixel_size;
+                    pixel_size.*int_a = big_line+1;
+                    pixel_size.*int_b = win.Size().*int_b;
 
-                            r.Quad(pixel_pos, pixel_size).color(grid_small_line_color);
-                        }
+                    if (!text)
+                    { // Line
+                        r.Quad(pixel_pos, pixel_size).color(zero     ? grid_zero_line_color :
+                                                            big_line ? grid_line_color      : grid_small_line_color);
                     }
-                    break;
-                  case 1: // Big lines
-                  case 3: // Text
-                    {
-                        int number_precision;
+                    else
+                    { // Number
+                        pixel_pos.*int_b = (vertical ? Draw::max.*int_b : Draw::min.*int_b);
+                        pixel_pos += (vertical ? grid_number_offset_v : grid_number_offset_h);
 
-                        if (step != 1)
-                        {
-                            for (number_precision = 0; number_precision < grid_number_max_precision; number_precision++)
-                            {
-                                std::string prev_str;
+                        char string_buf[grid_number_precision * 3 / 2];
+                        std::snprintf(string_buf, sizeof string_buf, "%.*Lg", grid_number_precision, value);
 
-                                bool need_more_precision = 0;
+                        if (!big_line)
+                            continue;
 
-                                for (int i = 0; i < line_count.*int_a * grid_cell_segments.*int_a; i++)
-                                {
-                                    long double value = first_cell_pos.*ld_a + i * cell_size.*ld_a / grid_cell_segments.*int_a;
-
-                                    char cur_str_buf[grid_number_max_precision * 3 / 2];
-
-                                    std::snprintf(cur_str_buf, sizeof cur_str_buf, "%.*Lg", number_precision, value);
-                                    std::string cur_str = cur_str_buf;
-
-                                    if (cur_str != prev_str)
-                                    {
-                                        need_more_precision = 1;
-                                        break;
-                                    }
-                                }
-
-                                if (!need_more_precision)
-                                    break;
-                            }
-                        }
-
-                        for (int i = 0; i < line_count.*int_a; i++)
-                        {
-                            long double value = first_cell_pos.*ld_a + i * cell_size.*ld_a;
-
-                            bool zero = abs(value) < cell_size.*ld_a / 2;
-                            if (zero && step == 1)
-                                continue;
-
-                            ivec2 pixel_pos;
-                            pixel_pos.*int_a = iround((value + offset.*ld_a) * scale.*ld_a);
-                            pixel_pos.*int_b = Draw::min.*int_b;
-
-                            ivec2 pixel_size;
-                            pixel_size.*int_a = 2;
-                            pixel_size.*int_b = win.Size().*int_b;
-
-                            if (step == 1)
-                            { // Line
-                                r.Quad(pixel_pos, pixel_size).color(grid_line_color);
-                            }
-                            else
-                            { // Number
-                                pixel_pos.*int_b = (vertical ? Draw::max.*int_b : Draw::min.*int_b);
-                                pixel_pos += (vertical ? grid_number_offset_v : grid_number_offset_h);
-
-                                char string_buf[grid_number_max_precision * 3 / 2];
-                                std::snprintf(string_buf, sizeof string_buf, "%.*Lg", number_precision, value);
-
-                                r.Text(pixel_pos, string_buf).align(ivec2(-1,1)).font(font_small).color(grid_text_color);
-                            }
-                        }
+                        r.Text(pixel_pos, string_buf).align(ivec2(-1,1)).font(font_small).color(grid_text_color);
                     }
-                    break;
-                  case 2: // Zero lines
-                    {
-                        ivec2 pixel_pos;
-                        pixel_pos.*int_a = iround(offset.*ld_a * scale.*ld_a);
-                        pixel_pos.*int_b = Draw::min.*int_b;
-
-                        ivec2 pixel_size;
-                        pixel_size.*int_a = 2;
-                        pixel_size.*int_b = win.Size().*int_b;
-
-                        r.Quad(pixel_pos, pixel_size).color(grid_zero_line_color);
-                    }
-                    break;
                 }
             };
 
-            for (int i = 0; i < 4; i++)
-            {
-                lambda(i, &ldvec2::x, &ldvec2::y, &ivec2::x, &ivec2::y);
-                lambda(i, &ldvec2::y, &ldvec2::x, &ivec2::y, &ivec2::x);
-            }
+            Graphics::Blending::FuncAdd();
+            Graphics::Blending::Equation(Graphics::Blending::eq_min);
+            lambda(0, &ldvec2::x, &ldvec2::y, &ivec2::x, &ivec2::y);
+            lambda(0, &ldvec2::y, &ldvec2::x, &ivec2::y, &ivec2::x);
+            r.Finish();
 
+            Graphics::Blending::FuncNormalPre();
+            Graphics::Blending::Equation(Graphics::Blending::eq_add);
+            lambda(1, &ldvec2::x, &ldvec2::y, &ivec2::x, &ivec2::y);
+            lambda(1, &ldvec2::y, &ldvec2::x, &ivec2::y, &ivec2::x);
             r.Finish();
         }
+
+
 
         Draw::Accumulator::Overwrite();
     }
