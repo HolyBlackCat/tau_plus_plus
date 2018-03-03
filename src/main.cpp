@@ -561,14 +561,17 @@ class Plot
 {
     static constexpr float window_margin = 0.4;
 
-    static constexpr ivec2 min_grid_cell_pixel_size = ivec2(96),
-                           grid_number_offset_h = ivec2(8,0),
-                           grid_number_offset_v = ivec2(3,-8);
+    static constexpr ivec2 min_grid_cell_pixel_size = ivec2(48),
+                           grid_number_offset_h     = ivec2(8,0),
+                           grid_number_offset_v     = ivec2(3,-16);
 
-    static constexpr fvec3 grid_line_color = fvec3(0.75),
-                           grid_zero_line_color = fvec3(0.3),
-                           grid_small_line_color = fvec3(0.85),
-                           grid_text_color = fvec3(0);
+    static constexpr fvec3 grid_text_color = fvec3(0),
+                           grid_light_text_color = fvec3(0.4);
+    static constexpr float grid_zero_line_color  = 0.2,
+                           grid_large_line_color = 0.55,
+                           grid_mid_line_color   = 0.8,
+                           grid_small_line_color = 0.85;
+
 
     static constexpr int grid_number_precision = 8;
 
@@ -585,8 +588,9 @@ class Plot
     ldvec2 default_scale = ldvec2(1);
     mutable distr_t distr{1};
 
-    ldvec2 grid_scale_step_factor = ldvec2(2);
-    ivec2 grid_cell_segments = ivec2(4);
+    ldvec2 grid_scale_step_factor = ldvec2(10);
+    ivec2 grid_cell_segments = ivec2(10);
+    ivec2 grid_cell_highlight_step = ivec2(5);
 
     bool grabbed = 0;
     ivec2 grab_offset = ivec2(0);
@@ -719,40 +723,60 @@ class Plot
                 (void)ld_b;
 
                 bool vertical = ld_a == &ldvec2::x;
+                bool text_on_mid_lines = cell_size.*ld_a > min_cell_size.*ld_a * 2;
 
                 for (int i = 0; i < line_count.*int_a * grid_cell_segments.*int_a; i++)
                 {
-                    bool big_line = i % grid_cell_segments.*int_a == 0;
+                    bool large_line = i % grid_cell_segments.*int_a == 0;
+                    bool mid_line = i % grid_cell_highlight_step.*int_a == 0;
 
                     long double value = first_cell_pos.*ld_a + i * cell_size.*ld_a / grid_cell_segments.*int_a;
 
-                    bool zero = abs(value) < cell_size.*ld_a / grid_cell_segments.*int_a / 2;
-
-                    ivec2 pixel_pos;
-                    pixel_pos.*int_a = iround((value + offset.*ld_a) * scale.*ld_a);
-                    pixel_pos.*int_b = Draw::min.*int_b;
-
-                    ivec2 pixel_size;
-                    pixel_size.*int_a = big_line+1;
-                    pixel_size.*int_b = win.Size().*int_b;
-
                     if (!text)
                     { // Line
-                        r.Quad(pixel_pos, pixel_size).color(zero     ? grid_zero_line_color :
-                                                            big_line ? grid_line_color      : grid_small_line_color);
+
+                        ldvec2 pixel_pos;
+                        pixel_pos.*ld_a = (value + offset.*ld_a) * scale.*ld_a;
+                        pixel_pos.*ld_b = 0;
+
+                        ivec2 pixel_size = ivec2(5, win.Size().*int_b + 5);
+
+                        float color;
+                        if (large_line)
+                        {
+                            if (abs(value) < cell_size.*ld_a / grid_cell_segments.*int_a / 2)
+                                color = grid_zero_line_color;
+                            else
+                                color = grid_large_line_color;
+                        }
+                        else if (mid_line)
+                        {
+                            color = grid_mid_line_color;
+                        }
+                        else
+                        {
+                            color = grid_small_line_color;
+                        }
+
+                        auto quad = r.Quad(pixel_pos, pixel_size).tex(ivec2(34 + 8 * !mid_line, 2), ivec2(5)).center().color(fvec3(1)).mix(1-color);
+
+                        if (!vertical)
+                            quad.matrix(fmat2(0,1,-1,0));
                     }
                     else
                     { // Number
+                        if (!(large_line || (mid_line && text_on_mid_lines)))
+                            continue;
+
+                        ivec2 pixel_pos;
+                        pixel_pos.*int_a = iround((value + offset.*ld_a) * scale.*ld_a);
                         pixel_pos.*int_b = (vertical ? Draw::max.*int_b : Draw::min.*int_b);
                         pixel_pos += (vertical ? grid_number_offset_v : grid_number_offset_h);
 
                         char string_buf[grid_number_precision * 3 / 2];
                         std::snprintf(string_buf, sizeof string_buf, "%.*Lg", grid_number_precision, value);
 
-                        if (!big_line)
-                            continue;
-
-                        r.Text(pixel_pos, string_buf).align(ivec2(-1,1)).font(font_small).color(grid_text_color);
+                        r.Text(pixel_pos, string_buf).align(ivec2(-1,1)).font(font_small).color(large_line ? grid_text_color : grid_light_text_color);
                     }
                 }
             };
@@ -769,8 +793,6 @@ class Plot
             lambda(1, &ldvec2::y, &ldvec2::x, &ivec2::y, &ivec2::x);
             r.Finish();
         }
-
-
 
         Draw::Accumulator::Overwrite();
     }
@@ -900,10 +922,6 @@ int main(int, char **)
 
     Graphics::ClearColor(fvec3(1));
     Graphics::Clear(Graphics::color);
-//    for (imat2 m : {fmat2(1,0,0,1), fmat2(0,1,-1,0)})
-//        for (int i = -4; i <= 4; i++)
-//            Draw::Line(m /mul/ fvec2(i,4.25) * 60, m /mul/ fvec2(i,-4.25) * 60, fvec3(0.85));
-//    r.Finish();
     Draw::Accumulator::Overwrite();
 
     Expression e("(1+s+s^3*0.5) / (0.2 * s^4 - 0.7 * s + 1)");
