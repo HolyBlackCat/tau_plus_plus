@@ -347,7 +347,7 @@ class Expression
                     }
 
                     long double value;
-                    if (auto end = Reflection::from_string(value, num.c_str()); end == num.c_str() + num.size())
+                    if (auto end = Reflection::from_string(value, num.c_str()); end == num.c_str() + num.size() && num.back() != '.')
                     {
                         token.type = Token::num;
                         token.num_value = value;
