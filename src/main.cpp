@@ -19,8 +19,42 @@ Graphics::Font font_object_main;
 Graphics::Font font_object_small;
 
 
+constexpr int interface_rect_height = 128;
+
+
 namespace Draw
 {
+    inline namespace TextPresets
+    {
+        [[nodiscard]] auto WithCursor(int index = Input::TextCursorPos(), fvec3 color = fvec3(tick_stabilizer.ticks % 60 < 30)) // Returns a preset
+        {
+            return [=](Renderers::Poly2D::Text_t &obj)
+            {
+                obj.callback([=](Renderers::Poly2D::Text_t::CallbackParams params)
+                {
+                    constexpr int width = 1;
+                    if (params.render_pass && params.index == index)
+                    {
+                        r.Quad(params.pos - ivec2(width, params.obj.state().ch_map->Ascent()), ivec2(1, params.obj.state().ch_map->Height()))
+                         .color(color).alpha(params.render[0].alpha).beta(params.render[0].beta);
+                    }
+                });
+            };
+        }
+        [[nodiscard]] auto ColorAfterPos(int index, fvec3 color) // Returns a preset
+        {
+            return [=](Renderers::Poly2D::Text_t &obj)
+            {
+                obj.callback([=](Renderers::Poly2D::Text_t::CallbackParams params)
+                {
+                    if (params.render_pass && params.index >= index)
+                        for (auto &it : params.render)
+                                it.color = color;
+                });
+            };
+        }
+    }
+
     namespace Accumulator
     {
         void Clear()
@@ -104,6 +138,20 @@ class Expression
 {
   public:
     using complex_t = std::complex<long double>;
+
+    struct Exception : std::exception
+    {
+        std::string message;
+        int pos;
+
+        Exception() {}
+        Exception(std::string message, int pos) : message(message), pos(pos) {}
+
+        const char *what() const noexcept override
+        {
+            return message.c_str();
+        }
+    };
 
   private:
     struct Token
@@ -366,7 +414,14 @@ class Expression
             it++;
         }
 
-        if (list.size() && list.back().type == Token::op)
+        if (list.empty())
+        {
+            *error_pos = 0;
+            *error_msg = "Пустое выражение.";
+            return 0;
+        }
+
+        if (list.back().type == Token::op)
         {
             *error_pos = list.back().starts_at;
             *error_msg = "Пропущено число или переменная.";
@@ -505,11 +560,11 @@ class Expression
             FinalizeTokenList(tokens, &err_pos, &err_msg))
         {
             if (!ParseExpression(tokens, &elements))
-                throw std::runtime_error("Неправильное выражение.");
+                throw Exception("Недопустимое выражение", 0);
         }
         else
         {
-            throw std::runtime_error(Str(std::string(err_pos, ' '), "^ ", err_msg));
+            throw Exception(err_msg, err_pos);
         }
     }
 
@@ -559,7 +614,13 @@ class Expression
 
 class Plot
 {
+  public:
+    using func_t = std::function<ldvec2(long double)>;
+
+  private:
     static constexpr float window_margin = 0.4;
+
+    static constexpr int bounding_box_point_count = 128;
 
     static constexpr ivec2 min_grid_cell_pixel_size = ivec2(48),
                            grid_number_offset_h     = ivec2(8,0),
@@ -573,19 +634,18 @@ class Plot
                            grid_small_line_color = 0.85;
 
 
-    static constexpr int grid_number_precision = 8;
+    static constexpr int grid_number_precision = 6;
 
 
-    using func_t = std::function<ldvec2(long double)>;
     using distr_t = std::exponential_distribution<long double>;
 
     func_t func;
     int flags;
 
     ldvec2 offset = ivec2(0);
-    ldvec2 scale = ivec2(1);
+    ldvec2 scale = ivec2(100);
     ldvec2 default_offset = ivec2(0);
-    ldvec2 default_scale = ldvec2(1);
+    ldvec2 default_scale = ldvec2(100);
     mutable distr_t distr{1};
 
     ldvec2 grid_scale_step_factor = ldvec2(10);
@@ -614,20 +674,24 @@ class Plot
         return ret;
     }
 
+    static ivec2 ViewportPos()
+    {
+        return ivec2(0, interface_rect_height);
+    }
+    static ivec2 ViewportSize()
+    {
+        return win.Size().sub_y(interface_rect_height);
+    }
+
   public:
     enum Flags {lock_scale_ratio = 1};
 
     Plot() {}
-    Plot(func_t func, int flags = 0) : func(std::move(func)), flags(flags)
+    Plot(func_t func, long double mean_freq, int flags = 0) : func(std::move(func)), flags(flags), distr(1.l / mean_freq)
     {
         RecalculateDefaultOffsetAndScale();
         offset = default_offset;
         scale = default_scale;
-    }
-
-    void SetMeanFreq(long double freq)
-    {
-        distr = distr_t(1.l / freq);
     }
 
     explicit operator bool() const
@@ -648,19 +712,22 @@ class Plot
             ResetAccumulator();
         }
 
-        // Draw points
-        while (count-- > 0)
+        if (func)
         {
-            long double freq = distr(Rand::Generator());
-            auto point = Point(freq);
-            if (!point.valid)
-                continue;
-            ldvec2 pos = (point.pos + offset) * scale;
-            if ((abs(pos) > win.Size()).any())
-                continue;
-            Draw::Dot(grabbed || scale_changed_this_tick, pos, fvec3(0,0.4,0.9));
+            // Draw points
+            while (count-- > 0)
+            {
+                long double freq = distr(Rand::Generator());
+                auto point = Point(freq);
+                if (!point.valid)
+                    continue;
+                ldvec2 pos = (point.pos + offset) * scale;
+                if ((abs(pos) > win.Size()/2).any())
+                    continue;
+                Draw::Dot(grabbed || scale_changed_this_tick, pos, fvec3(0,0.4,0.9));
+            }
+            r.Finish();
         }
-        r.Finish();
 
         if (!scale_changed_this_tick && scale_changed_prev_tick)
             ResetAccumulator();
@@ -672,9 +739,9 @@ class Plot
     {
         ldvec2 box_min(0), box_max(0);
 
-        for (int i = 0; i <= 64; i++)
+        for (int i = 0; i < bounding_box_point_count; i++)
         {
-            long double freq = i / 4.l;
+            long double freq = distr(Rand::Generator());
             auto point = Point(freq);
             if (!point.valid)
                 continue;
@@ -693,8 +760,10 @@ class Plot
             default_offset.*mem = (box_min.*mem + box_max.*mem) / -2;
             if (box_min.*mem == box_max.*mem)
                 continue;
-            default_scale.*mem = (ldvec2(win.Size()).*mem * (1-window_margin)) / (box_max.*mem - box_min.*mem);
+            default_scale.*mem = (ldvec2(ViewportSize()).*mem * (1-window_margin)) / (box_max.*mem - box_min.*mem);
         }
+
+        default_offset += ViewportPos() / default_scale / 2;
 
         if (flags & lock_scale_ratio)
             default_scale = ldvec2(default_scale.min());
@@ -727,10 +796,11 @@ class Plot
 
                 for (int i = 0; i < line_count.*int_a * grid_cell_segments.*int_a; i++)
                 {
-                    bool large_line = i % grid_cell_segments.*int_a == 0;
-                    bool mid_line = i % grid_cell_highlight_step.*int_a == 0;
-
                     long double value = first_cell_pos.*ld_a + i * cell_size.*ld_a / grid_cell_segments.*int_a;
+
+                    bool mid_line = i % grid_cell_highlight_step.*int_a == 0;
+                    bool large_line = i % grid_cell_segments.*int_a == 0;
+                    bool zero_line = large_line && abs(value) < cell_size.*ld_a / grid_cell_segments.*int_a / 2;
 
                     if (!text)
                     { // Line
@@ -742,21 +812,14 @@ class Plot
                         ivec2 pixel_size = ivec2(5, win.Size().*int_b + 5);
 
                         float color;
-                        if (large_line)
-                        {
-                            if (abs(value) < cell_size.*ld_a / grid_cell_segments.*int_a / 2)
-                                color = grid_zero_line_color;
-                            else
-                                color = grid_large_line_color;
-                        }
+                        if (zero_line)
+                            color = grid_zero_line_color;
+                        else if (large_line)
+                            color = grid_large_line_color;
                         else if (mid_line)
-                        {
                             color = grid_mid_line_color;
-                        }
                         else
-                        {
                             color = grid_small_line_color;
-                        }
 
                         auto quad = r.Quad(pixel_pos, pixel_size).tex(ivec2(34 + 8 * !mid_line, 2), ivec2(5)).center().color(fvec3(1)).mix(1-color);
 
@@ -773,8 +836,9 @@ class Plot
                         pixel_pos.*int_b = (vertical ? Draw::max.*int_b : Draw::min.*int_b);
                         pixel_pos += (vertical ? grid_number_offset_v : grid_number_offset_h);
 
-                        char string_buf[grid_number_precision * 3 / 2];
-                        std::snprintf(string_buf, sizeof string_buf, "%.*Lg", grid_number_precision, value);
+                        char string_buf[grid_number_precision * 3 / 2] = "0";
+                        if (!zero_line)
+                            std::snprintf(string_buf, sizeof string_buf, "%.*Lg", grid_number_precision, value);
 
                         r.Text(pixel_pos, string_buf).align(ivec2(-1,1)).font(font_small).color(large_line ? grid_text_color : grid_light_text_color);
                     }
@@ -916,28 +980,169 @@ class Button
 };
 
 
+class TextField
+{
+    static constexpr int height = 24, text_offset_x = 6;
+
+    static constexpr fvec3 title_color = fvec3(0),
+                           invalid_color = fvec3(0.9,0.2,0);
+
+    using tick_func_t = std::function<void(TextField &, bool updated)>;
+    using render_func_t = std::function<void(const TextField &)>;
+
+    inline static unsigned int id_counter = 0, active_id = -1;
+
+    unsigned int id = -2;
+  public:
+
+    ivec2 location = ivec2(0);
+    ivec2 pos = ivec2(0);
+    int width = 128;
+    int max_chars = 64;
+    std::string title;
+    std::string allowed_chars = "";
+    bool visible = 0;
+
+    tick_func_t tick_func;
+    render_func_t render_func;
+
+    std::string value;
+
+    TextField() {}
+    TextField(ivec2 location, ivec2 pos, int width, int max_chars, std::string title, std::string allowed_chars = "", tick_func_t tick_func = 0, render_func_t render_func = 0)
+        : id(id_counter++), location(location), pos(pos), width(width), max_chars(max_chars), title(title), allowed_chars(allowed_chars), visible(1), tick_func(tick_func), render_func(render_func) {}
+
+    bool invalid = 0;
+    int invalid_pos = 0;
+    std::string invalid_text;
+
+    ivec2 ScreenPos() const
+    {
+        return win.Size() * location / 2 + pos;
+    }
+    ivec2 ScreenSize() const
+    {
+        return ivec2(width, height);
+    }
+
+    void Activate()
+    {
+        active_id = id;
+        Input::Text(0);
+    }
+    static void Deactivate()
+    {
+        active_id = -1;
+        Input::Text(0);
+    }
+
+    void Tick(bool &button_pressed)
+    {
+        if (!visible)
+            return;
+
+        ivec2 screen_pos = ScreenPos(),
+              screen_size = ScreenSize();
+
+        if ((mouse.pos() >= screen_pos).all() && (mouse.pos() < screen_pos + screen_size).all() && button_pressed)
+        {
+            button_pressed = 0;
+            Activate();
+        }
+
+        std::string saved_value = value;
+        if (id == active_id)
+            Input::Text(&value, max_chars, allowed_chars);
+
+        if (tick_func)
+            tick_func(*this, value != saved_value);
+    }
+
+    void Render() const
+    {
+        if (!visible)
+            return;
+
+        ivec2 screen_pos = ScreenPos(),
+              screen_size = ScreenSize();
+
+        // Box
+        r.Quad(screen_pos, screen_size).color(fvec3(0));
+        r.Quad(screen_pos+1, screen_size-2).color(fvec3(0.95));
+
+        // Title
+        r.Text(screen_pos, title).color(title_color).font(font_small).align(ivec2(-1,1));
+
+        // Invalid text
+        r.Text(screen_pos.add_y(height), invalid_text).color(title_color).font(font_small).align(ivec2(-1,-1)).color(invalid_color);
+
+        { // Text
+            auto text = r.Text(screen_pos + ivec2(text_offset_x, height/2), value).align_h(-1).font(font_small).color(fvec3(0));
+            if (invalid)
+                text.preset(Draw::ColorAfterPos(invalid_pos, invalid_color));
+            if (id == active_id && tick_stabilizer.ticks % 60 < 30)
+                text.preset(Draw::WithCursor(Input::TextCursorPos(), fvec3(0)));
+        }
+
+        if (render_func)
+            render_func(*this);
+    }
+};
+
+
 int main(int, char **)
 {
+    const std::string default_expression = "0";
+
     Draw::Init();
 
     Graphics::ClearColor(fvec3(1));
     Graphics::Clear(Graphics::color);
     Draw::Accumulator::Overwrite();
 
-    Expression e("(1+s+s^3*0.5) / (0.2 * s^4 - 0.7 * s + 1)");
-    Plot plot([e](long double t){return e.EvalVec({0,t});});
+    Expression e(default_expression);
+    auto func_1 = [&e](long double t){return e.EvalVec({0,t});};
+    Plot plot(func_1, 1.2);
 
     std::vector<Button> buttons;
+    std::vector<TextField> text_fields;
 
-    enum class ButtonCategory {scale};
+    enum class InterfacePack {func_input, scale};
 
-    auto AddButtonCategory = [&](ButtonCategory category)
+    auto AddInterface = [&](InterfacePack category)
     {
         constexpr float scale_factor = 1.01;
 
         switch (category)
         {
-          case ButtonCategory::scale:
+          case InterfacePack::func_input:
+            text_fields.push_back(TextField(ivec2(-1,-1), ivec2(24, 80), 9000, 10, "Функция W(s)", "01234567890.,+-*/^()sj ", [&](TextField &ref, bool upd)
+            {
+                ref.width = win.Size().x - ref.pos.x * 2;
+                ref.max_chars = ref.width / 8;
+                if (upd)
+                {
+                    plot.ResetAccumulator();
+                    try
+                    {
+                        e = Expression(ref.value);
+                        plot = Plot(func_1, 1.2);
+                        ref.invalid = 0;
+                        ref.invalid_pos = 0;
+                        ref.invalid_text = "";
+                    }
+                    catch (Expression::Exception &e)
+                    {
+                        plot = Plot();
+                        ref.invalid = 1;
+                        ref.invalid_pos = e.pos;
+                        ref.invalid_text = e.message;
+                    }
+                }
+            }));
+            text_fields.back().value = default_expression;
+            break;
+          case InterfacePack::scale:
             {
                 int x = -32;
                 buttons.push_back(Button(ivec2(1,-1), ivec2(x,32), 0, 0, "Сбросить расположение графика", [&]{plot.ResetOffsetAndScale();})); // Reset offset and scale
@@ -953,13 +1158,19 @@ int main(int, char **)
             break;
         }
     };
-    AddButtonCategory(ButtonCategory::scale);
+    AddInterface(InterfacePack::func_input);
+    AddInterface(InterfacePack::scale);
 
     auto Tick = [&]
     {
         Draw::Accumulator::Return();
 
         bool button_pressed = mouse.left.pressed();
+
+        if (button_pressed)
+            TextField::Deactivate();
+        for (auto &text_field : text_fields)
+            text_field.Tick(button_pressed);
 
         Button::ResetTooltip();
         for (auto &button : buttons)
@@ -974,8 +1185,20 @@ int main(int, char **)
     };
     auto Render = [&]
     {
+        constexpr float interface_rect_alpha = 0.95,
+                        interface_rect_alpha2 = 0.75;
+
         Draw::Accumulator::Return();
 
+        // Interface background
+        r.Quad(Draw::min, ivec2(win.Size().x, interface_rect_height)).color(fvec3(1)).alpha(interface_rect_alpha, interface_rect_alpha, interface_rect_alpha2, interface_rect_alpha2);
+        r.Quad(Draw::min.add_y(interface_rect_height), ivec2(win.Size().x, 1)).color(fvec3(0));
+
+        // Text fields
+        for (auto &text_field : text_fields)
+            text_field.Render();
+
+        // Buttons
         for (const auto &button : buttons)
             button.Render();
 
