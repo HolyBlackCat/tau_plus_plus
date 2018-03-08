@@ -1713,6 +1713,16 @@ namespace Graphics
             glBindRenderbuffer(GL_RENDERBUFFER, 0);
         }
 
+        void Storage(ivec2 size, GLenum format)
+        {
+            Bind();
+            glRenderbufferStorage(GL_RENDERBUFFER, format, size.x, size.y);
+        }
+
+        ~RenderBuffer()
+        {
+            Destroy();
+        }
     };
 
     class FrameBuffer
@@ -1765,6 +1775,11 @@ namespace Graphics
             return bool(handle);
         }
 
+        GLuint GetHandle() const
+        {
+            return *handle;
+        }
+
         void Bind() const
         {
             DebugAssert("Attempt to bind a null framebuffer.", *handle);
@@ -1788,7 +1803,10 @@ namespace Graphics
         void Attach(Attachment att) // Binds the framebuffer. All previous color attachements are removed.
         {
             Bind();
-            glFramebufferTexture2D(GL_DRAW_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, att.type, att.handle, 0);
+            if (att.type != GL_RENDERBUFFER)
+                glFramebufferTexture2D(GL_DRAW_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, att.type, att.handle, 0);
+            else
+                glFramebufferRenderbuffer(GL_DRAW_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, att.type, att.handle);
             glDrawBuffer(GL_COLOR_ATTACHMENT0);
         }
         void Attach(Utils::ViewRange<Attachment> att) // Binds the framebuffer. All previous color attachements are removed.
@@ -1796,7 +1814,12 @@ namespace Graphics
             Bind();
             int pos = 0;
             for (const auto &it : att)
-                glFramebufferTexture2D(GL_DRAW_FRAMEBUFFER, GL_COLOR_ATTACHMENT0 + pos++, it.type, it.handle, 0);
+            {
+                if (it.type != GL_RENDERBUFFER)
+                    glFramebufferTexture2D(GL_DRAW_FRAMEBUFFER, GL_COLOR_ATTACHMENT0 + pos++, it.type, it.handle, 0);
+                else
+                    glFramebufferRenderbuffer(GL_DRAW_FRAMEBUFFER, GL_COLOR_ATTACHMENT0 + pos++, it.type, it.handle);
+            }
             std::vector<GLenum> att_enums(pos);
             std::iota(att_enums.begin(), att_enums.end(), GL_COLOR_ATTACHMENT0);
             glDrawBuffers(pos, att_enums.data());

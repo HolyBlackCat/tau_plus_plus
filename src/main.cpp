@@ -1,5 +1,8 @@
 #include "everything.h"
 
+//#define FORCE_ACCUMULATOR // Use accumulator even if framebuffers are supported.
+//#define FORCE_FRAMEBUFFER // Use framebuffers, halt if not supported.
+
 #include <complex>
 #include <iostream>
 #include <list>
@@ -57,30 +60,35 @@ namespace Draw
 
     namespace Accumulator
     {
-        void Clear()
-        {
-            glClear(GL_ACCUM_BUFFER_BIT);
-        }
+        bool use_framebuffer = 0;
+        Graphics::FrameBuffer framebuffer;
+        Graphics::RenderBuffer framebuffer_rbuf;
+
         void Overwrite()
         {
-            glAccum(GL_LOAD, 1);
-        }
-        void Add()
-        {
-            glAccum(GL_ACCUM, 1);
+            if (!use_framebuffer)
+            {
+                glAccum(GL_LOAD, 1);
+            }
+            else
+            {
+                framebuffer.Bind();
+                glBlitFramebuffer(0, 0, win.Size().x, win.Size().y, 0, 0, win.Size().x, win.Size().y, GL_COLOR_BUFFER_BIT, GL_NEAREST);
+                framebuffer.Unbind();
+            }
         }
         void Return()
         {
-            glAccum(GL_RETURN, 1);
-        }
-
-        void ModifyAdd(float value)
-        {
-            glAccum(GL_ADD, value);
-        }
-        void ModifyMul(float value)
-        {
-            glAccum(GL_MULT, value);
+            if (!use_framebuffer)
+            {
+                glAccum(GL_RETURN, 1);
+            }
+            else
+            {
+                glBindFramebuffer(GL_READ_FRAMEBUFFER, framebuffer.GetHandle());
+                glBlitFramebuffer(0, 0, win.Size().x, win.Size().y, 0, 0, win.Size().x, win.Size().y, GL_COLOR_BUFFER_BIT, GL_NEAREST);
+                glBindFramebuffer(GL_READ_FRAMEBUFFER, 0);
+            }
         }
     }
 
@@ -93,6 +101,9 @@ namespace Draw
 
         r.SetMatrix(fmat4::ortho(ivec2(min.x, max.y), ivec2(max.x, min.y), -1, 1));
         mouse.Transform(win.Size()/2, 1);
+
+        if (Accumulator::use_framebuffer)
+            Accumulator::framebuffer_rbuf.Storage(win.Size(), GL_RGBA8);
     }
 
     void Init()
@@ -116,8 +127,30 @@ namespace Draw
         r.Create(0x1000);
         r.SetTexture(tex_main);
         r.SetDefaultFont(font_main);
-        Draw::HandleResize();
         r.BindShader();
+
+        #if defined(FORCE_ACCUMULATOR) && defined(FORCE_FRAMEBUFFER)
+        #  error You cant define both FORCE_ACCUMULATOR and FORCE_FRAMEBUFFER
+        #endif
+
+        #ifdef FORCE_ACCUMULATOR
+        Accumulator::use_framebuffer = 0;
+        #else
+        Accumulator::use_framebuffer = bool(glBlitFramebuffer);
+        #ifdef FORCE_FRAMEBUFFER
+        if (!Accumulator::use_framebuffer)
+            Program::Error("FORCE_FRAMEBUFFER was defined, but framebuffers are not supported on this machine.");
+        #endif
+        #endif
+        if (Accumulator::use_framebuffer)
+        {
+            Accumulator::framebuffer_rbuf.Create();
+            Accumulator::framebuffer_rbuf.Storage(win.Size(), GL_RGBA8);
+            Accumulator::framebuffer.Create();
+            Accumulator::framebuffer.Attach(Accumulator::framebuffer_rbuf);
+        }
+
+        Draw::HandleResize();
     }
 
     void Dot(int type, fvec2 pos, fvec3 color, float alpha = 1, float beta = 1)
@@ -1233,13 +1266,14 @@ int main(int, char **)
             {
                 win.size_changed = 0;
                 Graphics::Viewport(win.Size());
-                Draw::Accumulator::Overwrite();
                 Draw::HandleResize();
                 plot.RecalculateDefaultOffsetAndScale();
                 plot.ResetAccumulator();
             }
             Tick();
         }
+
+        Graphics::CheckErrors();
 
         Render();
         r.Finish();

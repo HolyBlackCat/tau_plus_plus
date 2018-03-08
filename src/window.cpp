@@ -185,10 +185,11 @@ void Window::Create(std::string name, ivec2 size, Settings settings)
     func_context.alloc();
     glfl::set_active_context(func_context);
     glfl::set_function_loader(SDL_GL_GetProcAddress);
-    if (settings.gl_profile != es)
-        glfl::load_gl(settings.gl_major, settings.gl_minor);
-    else
-        glfl::load_gles(settings.gl_major, settings.gl_minor);
+//    if (settings.gl_profile != es)
+//        glfl::load_gl(settings.gl_major, settings.gl_minor);
+//    else
+//        glfl::load_gles(settings.gl_major, settings.gl_minor);
+    glfl::load_gl();
 
     SDL_SetWindowData(*window, window_data_name_this_ptr, this);
 
