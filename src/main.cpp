@@ -375,7 +375,7 @@ class Expression
                 }
 
                 *error_pos = index;
-                *error_msg = Str("В выражении могут встречаться только числа, мнимая единица `j`, переменная `", var_name, "`, скобки и операции.");
+                *error_msg = Str("Недопустимый элемент. Ожидалось число, переменная `", var_name, "`, мнимая единица `j`, скобка или операция.");
                 return 0;
             }
         }
@@ -389,6 +389,7 @@ class Expression
 
         while (it != list.end())
         {
+            bool increment_iter = 1;
             switch (it->type)
             {
               case Token::lparen:
@@ -415,23 +416,29 @@ class Expression
                     return 0;
                 }
                 paren_stack.pop_back();
+                if (it != prev && (prev->type == Token::lparen || prev->type == Token::op))
+                {
+                    *error_pos = it->starts_at;
+                    *error_msg = "Пропущено число, переменная или мнимая единица `j`.";
+                    return 0;
+                }
                 break;
               case Token::op:
                 if ((it == prev || prev->type == Token::lparen || prev->type == Token::op) && (it->op_type == Token::plus || it->op_type == Token::minus))
                 {
-                    if (it->op_type == Token::plus)
+                    if (it->op_type == Token::minus)
                     {
-                        it = list.erase(it);
-                    }
-                    else
-                    {
+                        it->op_type = Token::fake_mul;
                         Token new_token;
                         new_token.starts_at = it->starts_at;
-                        new_token.op_type = Token::fake_mul;
-                        it = list.insert(it, new_token);
                         new_token.type = Token::num;
                         new_token.num_value = -1;
                         it = list.insert(it, new_token);
+                    }
+                    else
+                    {
+                        it = list.erase(it);
+                        increment_iter = 0;
                     }
                     break;
                 }
@@ -443,8 +450,10 @@ class Expression
                 }
                 break;
             }
+
             prev = it;
-            it++;
+            if (increment_iter)
+                it++;
         }
 
         if (list.empty())
@@ -757,7 +766,8 @@ class Plot
                 ldvec2 pos = (point.pos + offset) * scale;
                 if ((abs(pos) > win.Size()/2).any())
                     continue;
-                Draw::Dot(grabbed || scale_changed_this_tick, pos, fvec3(0,0.4,0.9));
+                bool zero = (abs(point.pos * scale) < 1.25).any();
+                Draw::Dot(grabbed || scale_changed_this_tick, pos, zero ? fvec3(1,0.6,0.3) : fvec3(0,0.4,0.9));
             }
             r.Finish();
         }
@@ -770,6 +780,9 @@ class Plot
 
     void RecalculateDefaultOffsetAndScale()
     {
+        if (!bool(func))
+            return;
+
         ldvec2 box_min(0), box_max(0);
 
         for (int i = 0; i < bounding_box_point_count; i++)
