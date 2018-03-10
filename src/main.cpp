@@ -658,11 +658,15 @@ class Plot
 {
   public:
     using func_t = std::function<ldvec2(long double)>;
+    constexpr static long double default_scale_factor = 100,
+                                 default_min = 0,
+                                 default_max = 8;
 
   private:
     static constexpr float window_margin = 0.4;
 
-    static constexpr int bounding_box_point_count = 128;
+    static constexpr int bounding_box_point_count = 128,
+                         grid_max_number_precision = 6;
 
     static constexpr ivec2 min_grid_cell_pixel_size = ivec2(48),
                            grid_number_offset_h     = ivec2(8,0),
@@ -676,19 +680,16 @@ class Plot
                            grid_small_line_color = 0.85;
 
 
-    static constexpr int grid_number_precision = 6;
-
-
-    using distr_t = std::exponential_distribution<long double>;
+    using distr_t = std::uniform_real_distribution<long double>;
 
     func_t func;
     int flags;
 
     ldvec2 offset = ivec2(0);
-    ldvec2 scale = ivec2(100);
+    ldvec2 scale = ivec2(default_scale_factor);
     ldvec2 default_offset = ivec2(0);
-    ldvec2 default_scale = ldvec2(100);
-    mutable distr_t distr{1};
+    ldvec2 default_scale = ldvec2(default_scale_factor);
+    mutable distr_t distr{default_min, default_max};
 
     ldvec2 grid_scale_step_factor = ldvec2(10);
     ivec2 grid_cell_segments = ivec2(10);
@@ -725,11 +726,24 @@ class Plot
         return win.Size().sub_y(interface_rect_height);
     }
 
+    ldvec2 MinScale()
+    {
+        return std::pow(0.1, grid_max_number_precision - 2) * ldvec2(min_grid_cell_pixel_size * 2 + 2);
+    }
+    ldvec2 MaxScale()
+    {
+        return std::pow(10, grid_max_number_precision - 2) * ldvec2(min_grid_cell_pixel_size * 2 - 2);
+    }
+
   public:
     enum Flags {lock_scale_ratio = 1};
 
-    Plot() {}
-    Plot(func_t func, long double mean_freq, int flags = 0) : func(std::move(func)), flags(flags), distr(1.l / mean_freq)
+    Plot(int flags = 0) : flags(flags)
+    {
+        default_offset += ViewportPos() / default_scale / 2;
+        offset = default_offset;
+    }
+    Plot(func_t func, long double a, long double b, int flags) : func(std::move(func)), flags(flags), distr(a, b)
     {
         RecalculateDefaultOffsetAndScale();
         offset = default_offset;
@@ -766,8 +780,7 @@ class Plot
                 ldvec2 pos = (point.pos + offset) * scale;
                 if ((abs(pos) > win.Size()/2).any())
                     continue;
-                bool zero = (abs(point.pos * scale) < 1.25).any();
-                Draw::Dot(grabbed || scale_changed_this_tick, pos, zero ? fvec3(1,0.6,0.3) : fvec3(0,0.4,0.9));
+                Draw::Dot(grabbed || scale_changed_this_tick, pos, count % 2 ? 1-8*(1-fvec3(0,0.4,0.9)) : fvec3(0,0.4,0.9));
             }
             r.Finish();
         }
@@ -809,10 +822,12 @@ class Plot
             default_scale.*mem = (ldvec2(ViewportSize()).*mem * (1-window_margin)) / (box_max.*mem - box_min.*mem);
         }
 
-        default_offset += ViewportPos() / default_scale / 2;
-
         if (flags & lock_scale_ratio)
             default_scale = ldvec2(default_scale.min());
+
+        default_offset += ViewportPos() / default_scale / 2;
+
+        clamp_assign(default_scale, MinScale(), MaxScale());
     }
 
     void ResetAccumulator()
@@ -882,9 +897,12 @@ class Plot
                         pixel_pos.*int_b = (vertical ? Draw::max.*int_b : Draw::min.*int_b);
                         pixel_pos += (vertical ? grid_number_offset_v : grid_number_offset_h);
 
-                        char string_buf[grid_number_precision * 3 / 2] = "0";
+                        if (!vertical)
+                            value = -value;
+
+                        char string_buf[64] = "0";
                         if (!zero_line)
-                            std::snprintf(string_buf, sizeof string_buf, "%.*Lg", grid_number_precision, value);
+                            std::snprintf(string_buf, sizeof string_buf, "%.*Lg", grid_max_number_precision, value);
 
                         r.Text(pixel_pos, string_buf).align(ivec2(-1,1)).font(font_small).color(large_line ? grid_text_color : grid_light_text_color);
                     }
@@ -895,6 +913,19 @@ class Plot
             Graphics::Blending::Equation(Graphics::Blending::eq_min);
             lambda(0, &ldvec2::x, &ldvec2::y, &ivec2::x, &ivec2::y);
             lambda(0, &ldvec2::y, &ldvec2::x, &ivec2::y, &ivec2::x);
+            if (flags & lock_scale_ratio)
+            {
+                for (float angle : {f_pi/4, f_pi*3/4})
+                {
+                    ldvec2 n = ldvec2(cos(angle), sin(angle)),
+                           n2 = ldvec2(n.y, -n.x);
+
+                    ldvec2 pos = offset * scale;
+                    pos -= pos /dot/ n2 * n2;
+
+                    r.Quad(pos, ivec2(5,win.Size().max()*2)).tex(ivec2(34, 2), ivec2(5)).center().color(fvec3(1)).mix(1-grid_large_line_color).matrix(fmat2(n.x,-n.y,n.y,n.x));
+                }
+            }
             r.Finish();
 
             Graphics::Blending::FuncNormalPre();
@@ -915,9 +946,16 @@ class Plot
 
     void Scale(ldvec2 scale_factor)
     {
+        ldvec2 old_mid_offset = ViewportPos() / 2 / scale - offset;
+
         scale *= scale_factor;
+        clamp_assign(scale, MinScale(), MaxScale());
+
         if (flags & lock_scale_ratio)
             scale.x = scale.y;
+
+        ldvec2 new_mid_offset = ViewportPos() / 2 / scale - offset;
+        offset += new_mid_offset - old_mid_offset;
 
         scale_changed_this_tick = 1;
 
@@ -1146,14 +1184,47 @@ int main(int, char **)
     Graphics::Clear(Graphics::color);
     Draw::Accumulator::Overwrite();
 
+    enum class State {main};
+    State cur_state = State::main;
+
+    long double freq_min = Plot::default_min, freq_max = Plot::default_max;
+
     Expression e(default_expression);
-    auto func_1 = [&e](long double t){return e.EvalVec({0,t});};
-    Plot plot(func_1, 1.2);
+
+    auto func_main = [&e](long double t){return e.EvalVec({0,t});};
+
+    Plot plot;
+
+    auto PlotFlags = [&]() -> int
+    {
+        switch (cur_state)
+        {
+          case State::main:
+            return Plot::lock_scale_ratio;
+        }
+        return 0;
+    };
+
+    auto ResetPlot = [&]
+    {
+        switch (cur_state)
+        {
+          case State::main:
+            plot = Plot(func_main, freq_min, freq_max, PlotFlags());
+            break;
+        }
+    };
+    auto NullPlot = [&]
+    {
+        plot = Plot(PlotFlags());
+    };
+
+    ResetPlot();
 
     std::vector<Button> buttons;
     std::vector<TextField> text_fields;
 
-    enum class InterfacePack {func_input, scale};
+    enum class InterfacePack {func_input, scale_xy, scale, mode};
 
     auto AddInterface = [&](InterfacePack category)
     {
@@ -1172,14 +1243,14 @@ int main(int, char **)
                     try
                     {
                         e = Expression(ref.value);
-                        plot = Plot(func_1, 1.2);
+                        ResetPlot();
                         ref.invalid = 0;
                         ref.invalid_pos = 0;
                         ref.invalid_text = "";
                     }
                     catch (Expression::Exception &e)
                     {
-                        plot = Plot();
+                        NullPlot();
                         ref.invalid = 1;
                         ref.invalid_pos = e.pos;
                         ref.invalid_text = e.message;
@@ -1193,6 +1264,16 @@ int main(int, char **)
                 int x = -32;
                 buttons.push_back(Button(ivec2(1,-1), ivec2(x,32), 0, 0, "Сбросить расположение графика", [&]{plot.ResetOffsetAndScale();})); // Reset offset and scale
                 x -= 48+8;
+                buttons.push_back(Button(ivec2(1,-1), ivec2(x,32), 2, 1, "Уменьшить масштаб", [&]{plot.Scale(ldvec2(1,1/scale_factor));})); // Decrease scale
+                x -= 48;
+                buttons.push_back(Button(ivec2(1,-1), ivec2(x,32), 1, 1, "Увеличить масштаб", [&]{plot.Scale(ldvec2(1,scale_factor));})); // Increase scale
+            }
+            break;
+          case InterfacePack::scale_xy:
+            {
+                int x = -32;
+                buttons.push_back(Button(ivec2(1,-1), ivec2(x,32), 0, 0, "Сбросить расположение графика", [&]{plot.ResetOffsetAndScale();})); // Reset offset and scale
+                x -= 48+8;
                 buttons.push_back(Button(ivec2(1,-1), ivec2(x,32), 6, 1, "Уменьшить масштаб по оси Y", [&]{plot.Scale(ldvec2(1,1/scale_factor));})); // Decrease Y scale
                 x -= 48;
                 buttons.push_back(Button(ivec2(1,-1), ivec2(x,32), 5, 1, "Увеличить масштаб по оси Y", [&]{plot.Scale(ldvec2(1,scale_factor));})); // Increase Y scale
@@ -1202,10 +1283,22 @@ int main(int, char **)
                 buttons.push_back(Button(ivec2(1,-1), ivec2(x,32), 3, 1, "Увеличить масштаб по оси X", [&]{plot.Scale(ldvec2(scale_factor,1));})); // Increase X scale
             }
             break;
+          case InterfacePack::mode:
+            {
+                int x = 128;
+                // Primary mode
+                buttons.push_back(Button(ivec2(-1,-1), ivec2(x,32), 7, 0, "Годограф (АФЧХ)", [&]{
+                    cur_state = State::main;
+                    ResetPlot();
+                }));
+                x += 48+8;
+            }
+            break;
         }
     };
     AddInterface(InterfacePack::func_input);
     AddInterface(InterfacePack::scale);
+    //AddInterface(InterfacePack::mode);
 
     auto Tick = [&]
     {
