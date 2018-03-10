@@ -155,7 +155,10 @@ namespace Draw
 
     void Dot(int type, fvec2 pos, fvec3 color, float alpha = 1, float beta = 1)
     {
-        r.Quad(pos, ivec2(14)).tex(ivec2(1 + 16 * type,1)).center().color(color).mix(0).alpha(alpha).beta(beta);
+        int y = (type >= 2);
+        if (type >= 2)
+            type -= 2;
+        r.Quad(pos, ivec2(13)).tex(ivec2(2+type*16,2+y*16)).center().color(color).mix(0).alpha(alpha).beta(beta);
     }
     void Line(int type, fvec2 a, fvec2 b, fvec3 color, float alpha = 1, float beta = 1)
     {
@@ -194,13 +197,13 @@ class Expression
 
         Type type;
 
-        int starts_at;
-
         union
         {
             Operator op_type;
             long double num_value;
         };
+
+        int starts_at;
 
         std::string ToString() const
         {
@@ -333,40 +336,64 @@ class Expression
                     index++;
                     break;
                 }
-                if (ch >= '0' && ch <= '9')
+                if ((ch >= '0' && ch <= '9') || ch == '.' || ch == ',')
                 {
                     std::string num;
-                    num += ch;
                     while (1)
                     {
-                        ch = str[++index];
-                        if ((ch >= '0' && ch <= '9') || ch == '.' || ch == ',')
-                            num += (ch == ',' ? '.' : ch);
-                        else
+                        ch = str[index];
+                        if (ch < '0' || ch > '9')
                             break;
+                        num += ch;
+                        index++;
+                    }
+                    ch = str[index];
+                    if (ch == '.' || ch == ',')
+                    {
+                        index++;
+                        num += '.';
+                        while (1)
+                        {
+                            ch = str[index];
+                            if (ch < '0' || ch > '9')
+                            {
+                                if (ch == '.' || ch == ',')
+                                {
+                                    *error_pos = index;
+                                    *error_msg = Str("Больше одной точки в записи числа.");
+                                    return 0;
+                                }
+                                break;
+                            }
+                            num += ch;
+                            index++;
+                        }
+                    }
+
+                    if (num == ".")
+                    {
+                        *error_pos = token.starts_at;
+                        *error_msg = Str("Ожидались цифры до и/или после точки.");
+                        return 0;
                     }
 
                     long double value;
-                    if (auto end = Reflection::from_string(value, num.c_str()); end == num.c_str() + num.size() && num.back() != '.')
+                    if (auto end = Reflection::from_string(value, num.c_str()); end == num.c_str() + num.size())
                     {
                         token.type = Token::num;
                         token.num_value = value;
                         ret.push_back(token);
                         break;
                     }
-                    else
-                    {
-                        index = token.starts_at;
-                    }
                 }
-                if (ch == var_name && (str[index+1] < 'a' || str[index+1] > 'z') && (str[index+1] < 'A' || str[index+1] > 'Z'))
+                if (ch == var_name)
                 {
                     token.type = Token::var;
                     ret.push_back(token);
                     index++;
                     break;
                 }
-                if (ch == 'j' && (str[index+1] < 'a' || str[index+1] > 'z') && (str[index+1] < 'A' || str[index+1] > 'Z'))
+                if (ch == 'j')
                 {
                     token.type = Token::imag_unit;
                     ret.push_back(token);
@@ -375,7 +402,7 @@ class Expression
                 }
 
                 *error_pos = index;
-                *error_msg = Str("Недопустимый элемент. Ожидалось число, переменная `", var_name, "`, мнимая единица `j`, скобка или операция.");
+                *error_msg = Str("Ожидалось число, переменная `", var_name, "`, мнимая единица `j`, скобка или операция.");
                 return 0;
             }
         }
@@ -400,11 +427,20 @@ class Expression
               case Token::imag_unit:
                 if (it != prev)
                 {
-                    if (prev->type != Token::lparen && prev->type != Token::op)
+                    if (it != prev && prev->type != Token::lparen && prev->type != Token::op)
                     {
+                        if (it->type == Token::lparen)
+                            paren_stack.pop_back();
+                        Token new_token;
+                        new_token.type = Token::op;
+                        new_token.op_type = (it->type != Token::num ? Token::mul : Token::pow);
+                        new_token.starts_at = it->starts_at;
+                        it = list.insert(it, new_token);
+                        /*
                         *error_pos = it->starts_at;
                         *error_msg = "Пропущена операция.";
                         return 0;
+                        */
                     }
                 }
                 break;
@@ -602,7 +638,7 @@ class Expression
             FinalizeTokenList(tokens, &err_pos, &err_msg))
         {
             if (!ParseExpression(tokens, &elements))
-                throw Exception("Недопустимое выражение", 0);
+                throw Exception("Недопустимое выражение.", 0);
         }
         else
         {
@@ -664,13 +700,14 @@ class Plot
 
   private:
     static constexpr float window_margin = 0.4;
+    static constexpr int window_smallest_pix_margin = 8;
 
-    static constexpr int bounding_box_point_count = 128,
+    static constexpr int bounding_box_segment_count = 512,
                          grid_max_number_precision = 6;
 
     static constexpr ivec2 min_grid_cell_pixel_size = ivec2(48),
                            grid_number_offset_h     = ivec2(8,0),
-                           grid_number_offset_v     = ivec2(3,-16);
+                           grid_number_offset_v     = ivec2(3,-8);
 
     static constexpr fvec3 grid_text_color = fvec3(0),
                            grid_light_text_color = fvec3(0.4);
@@ -689,7 +726,9 @@ class Plot
     ldvec2 scale = ivec2(default_scale_factor);
     ldvec2 default_offset = ivec2(0);
     ldvec2 default_scale = ldvec2(default_scale_factor);
-    mutable distr_t distr{default_min, default_max};
+    long double range_start = default_min, range_len = default_max - default_min;
+    long double current_value_offset = 0.5; // NOTE: These default values must be synced with those in `ResetAccumulator()`.
+    unsigned long long current_value_index = 0, current_value_max_index = 1;
 
     ldvec2 grid_scale_step_factor = ldvec2(10);
     ivec2 grid_cell_segments = ivec2(10);
@@ -735,6 +774,18 @@ class Plot
         return std::pow(10, grid_max_number_precision - 2) * ldvec2(min_grid_cell_pixel_size * 2 - 2);
     }
 
+    void AddPoint(int type, long double value)
+    {
+        auto point = Point(value);
+        if (!point.valid)
+            return;
+        ldvec2 pos = (point.pos + offset) * scale;
+        if ((abs(pos) > win.Size()/2).any())
+            return;
+        Draw::Dot(type, pos, fvec3(0,0.4,0.9));
+    }
+
+
   public:
     enum Flags {lock_scale_ratio = 1};
 
@@ -743,7 +794,7 @@ class Plot
         default_offset += ViewportPos() / default_scale / 2;
         offset = default_offset;
     }
-    Plot(func_t func, long double a, long double b, int flags) : func(std::move(func)), flags(flags), distr(a, b)
+    Plot(func_t func, long double a, long double b, int flags) : func(std::move(func)), flags(flags), range_start(a), range_len(b - a)
     {
         RecalculateDefaultOffsetAndScale();
         offset = default_offset;
@@ -773,14 +824,21 @@ class Plot
             // Draw points
             while (count-- > 0)
             {
-                long double freq = distr(Rand::Generator());
-                auto point = Point(freq);
-                if (!point.valid)
-                    continue;
-                ldvec2 pos = (point.pos + offset) * scale;
-                if ((abs(pos) > win.Size()/2).any())
-                    continue;
-                Draw::Dot(grabbed || scale_changed_this_tick, pos, count % 2 ? 1-8*(1-fvec3(0,0.4,0.9)) : fvec3(0,0.4,0.9));
+                long double value = range_start + (current_value_offset + current_value_index++ / double(current_value_max_index)) * range_len;
+
+                if (current_value_index >= current_value_max_index)
+                {
+                    if (current_value_max_index == 1)
+                    {
+                        AddPoint(2, range_start);
+                        AddPoint(2, range_start+range_len);
+                    }
+                    current_value_index = 0;
+                    current_value_max_index <<= 1;
+                    current_value_offset /= 2;
+                }
+
+                AddPoint(grabbed || scale_changed_this_tick, value);
             }
             r.Finish();
         }
@@ -798,10 +856,9 @@ class Plot
 
         ldvec2 box_min(0), box_max(0);
 
-        for (int i = 0; i < bounding_box_point_count; i++)
+        for (int i = 0; i <= bounding_box_segment_count; i++)
         {
-            long double freq = distr(Rand::Generator());
-            auto point = Point(freq);
+            auto point = Point(i / double(bounding_box_segment_count) * range_len + range_start);
             if (!point.valid)
                 continue;
 
@@ -825,9 +882,12 @@ class Plot
         if (flags & lock_scale_ratio)
             default_scale = ldvec2(default_scale.min());
 
+        clamp_assign(default_scale, MinScale(), MaxScale());
+
         default_offset += ViewportPos() / default_scale / 2;
 
-        clamp_assign(default_scale, MinScale(), MaxScale());
+        if ((abs(default_offset * default_scale) > win.Size()/2).any())
+            default_offset = clamp(default_offset * default_scale, -win.Size()/2+window_smallest_pix_margin, win.Size()/2-window_smallest_pix_margin) / default_scale;
     }
 
     void ResetAccumulator()
@@ -936,6 +996,10 @@ class Plot
         }
 
         Draw::Accumulator::Overwrite();
+
+        current_value_offset = 0.5;
+        current_value_index = 0;
+        current_value_max_index = 1;
     }
 
     void Grab()
@@ -1207,16 +1271,17 @@ int main(int, char **)
 
     auto ResetPlot = [&]
     {
-        switch (cur_state)
+        if (!bool(e))
+            plot = Plot(PlotFlags());
+        else
         {
-          case State::main:
-            plot = Plot(func_main, freq_min, freq_max, PlotFlags());
-            break;
+            switch (cur_state)
+            {
+              case State::main:
+                plot = Plot(func_main, freq_min, freq_max, PlotFlags());
+                break;
+            }
         }
-    };
-    auto NullPlot = [&]
-    {
-        plot = Plot(PlotFlags());
     };
 
     ResetPlot();
@@ -1224,18 +1289,20 @@ int main(int, char **)
     std::vector<Button> buttons;
     std::vector<TextField> text_fields;
 
-    enum class InterfacePack {func_input, scale_xy, scale, mode};
+    enum class InterfacePack {func_input, range_input, scale_xy, scale, mode};
 
     auto AddInterface = [&](InterfacePack category)
     {
         constexpr float scale_factor = 1.01;
 
+        constexpr int range_input_w = 64, input_gap_w = 32;
+
         switch (category)
         {
           case InterfacePack::func_input:
-            text_fields.push_back(TextField(ivec2(-1,-1), ivec2(24, 80), 9000, 10, "Функция W(s)", "01234567890.,+-*/^()sj ", [&](TextField &ref, bool upd)
+            text_fields.push_back(TextField(ivec2(-1,-1), ivec2(24+range_input_w*2 + input_gap_w*2, 80), 9000, 10, "Передаточная функция W(s)", "01234567890.,+-*/^()sj ", [&](TextField &ref, bool upd)
             {
-                ref.width = win.Size().x - ref.pos.x * 2;
+                ref.width = win.Size().x - ref.pos.x - 24;
                 ref.max_chars = ref.width / 8;
                 if (upd)
                 {
@@ -1243,21 +1310,56 @@ int main(int, char **)
                     try
                     {
                         e = Expression(ref.value);
-                        ResetPlot();
                         ref.invalid = 0;
                         ref.invalid_pos = 0;
                         ref.invalid_text = "";
                     }
-                    catch (Expression::Exception &e)
+                    catch (Expression::Exception &exc)
                     {
-                        NullPlot();
+                        e = {};
                         ref.invalid = 1;
-                        ref.invalid_pos = e.pos;
-                        ref.invalid_text = e.message;
+                        ref.invalid_pos = exc.pos;
+                        ref.invalid_text = exc.message;
                     }
+                    ResetPlot();
                 }
             }));
             text_fields.back().value = default_expression;
+            break;
+          case InterfacePack::range_input:
+            {
+                static auto Lambda = [&](TextField &ref, long double &param)
+                {
+                    if (auto it = ref.value.begin(); it != ref.value.end())
+                        ref.value.erase(std::remove(++it, ref.value.end(), '-'), ref.value.end());
+                    if (auto it = std::find(ref.value.begin(), ref.value.end(), '.'); it != ref.value.end())
+                        ref.value.erase(std::remove(++it, ref.value.end(), '.'), ref.value.end());
+                    std::string value_copy = ref.value;
+                    std::replace(value_copy.begin(), value_copy.end(), ',', '.');
+                    if (value_copy.empty())
+                        value_copy = "0";
+                    else if (value_copy == "-")
+                        value_copy = "-0";
+                    Reflection::from_string(param, value_copy.c_str());
+                    ResetPlot();
+                };
+                text_fields.push_back(TextField(ivec2(-1,-1), ivec2(24, 80), 64, 10, "Мин. частота", "0123456789.-", [&](TextField &ref, bool upd)
+                {
+                    if (upd)
+                    {
+                        Lambda(ref, freq_min);
+                    }
+                }));
+                text_fields.back().value = Reflection::to_string(Plot::default_min);
+                text_fields.push_back(TextField(ivec2(-1,-1), ivec2(24+range_input_w+input_gap_w, 80), 64, 10, "Макс. частота", "0123456789.-", [&](TextField &ref, bool upd)
+                {
+                    if (upd)
+                    {
+                        Lambda(ref, freq_max);
+                    }
+                }));
+                text_fields.back().value = Reflection::to_string(Plot::default_max);
+            }
             break;
           case InterfacePack::scale:
             {
@@ -1297,6 +1399,7 @@ int main(int, char **)
         }
     };
     AddInterface(InterfacePack::func_input);
+    AddInterface(InterfacePack::range_input);
     AddInterface(InterfacePack::scale);
     //AddInterface(InterfacePack::mode);
 
