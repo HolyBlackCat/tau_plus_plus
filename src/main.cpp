@@ -1361,8 +1361,6 @@ int main(int, char **)
                     std::replace(value_copy.begin(), value_copy.end(), ',', '.');
                     if (value_copy.empty())
                         value_copy = "0";
-                    else if (value_copy == "-")
-                        value_copy = "-0";
                     Reflection::from_string(param, value_copy.c_str());
                     need_interface_reset = 1;
                 };

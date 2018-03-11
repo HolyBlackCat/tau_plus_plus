@@ -201,6 +201,8 @@ namespace Reflection
         // Increments `ptr` until a first non-whitespace char (or end of string) is reached.
         inline void skip_ws(const char *&ptr)
         {
+            if (!ptr)
+                return;
             while (*ptr && (unsigned char)*ptr <= ' ')
                 ptr++;
         }
