@@ -724,7 +724,7 @@ class Plot
                            grid_mid_line_color   = 0.8,
                            grid_small_line_color = 0.85;
 
-    static constexpr fvec3 secondary_color = fvec3(0.45);
+    static constexpr fvec3 secondary_color = fvec3(0.6);
 
 
     using distr_t = std::uniform_real_distribution<long double>;
