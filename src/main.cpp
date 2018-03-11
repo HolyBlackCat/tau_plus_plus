@@ -698,6 +698,12 @@ class Plot
                                  default_min = 0,
                                  default_max = 8;
 
+    struct Func
+    {
+        func_t func;
+        fvec3 color;
+    };
+
   private:
     static constexpr float window_margin = 0.4;
     static constexpr int window_smallest_pix_margin = 8;
@@ -719,7 +725,7 @@ class Plot
 
     using distr_t = std::uniform_real_distribution<long double>;
 
-    func_t func;
+    std::vector<Func> funcs;
     int flags;
 
     ldvec2 offset = ivec2(0);
@@ -728,7 +734,7 @@ class Plot
     ldvec2 default_scale = ldvec2(default_scale_factor);
     long double range_start = default_min, range_len = default_max - default_min;
     long double current_value_offset = 0.5; // NOTE: These default values must be synced with those in `ResetAccumulator()`.
-    unsigned long long current_value_index = 0, current_value_max_index = 1;
+    unsigned long long current_value_index = 0, current_value_max_index = 1; // ^
 
     ldvec2 grid_scale_step_factor = ldvec2(10);
     ivec2 grid_cell_segments = ivec2(10);
@@ -747,10 +753,10 @@ class Plot
         ldvec2 pos;
     };
 
-    PointData Point(long double freq) const
+    PointData Point(long double freq, int func_index) const
     {
         PointData ret;
-        ret.pos = func(freq);
+        ret.pos = funcs[func_index].func(freq);
         ret.valid = std::isfinite(ret.pos.x) && std::isfinite(ret.pos.y);
         ret.pos.y = -ret.pos.y;
         return ret;
@@ -776,13 +782,16 @@ class Plot
 
     void AddPoint(int type, long double value)
     {
-        auto point = Point(value);
-        if (!point.valid)
-            return;
-        ldvec2 pos = (point.pos + offset) * scale;
-        if ((abs(pos) > win.Size()/2).any())
-            return;
-        Draw::Dot(type, pos, fvec3(0,0.4,0.9));
+        for (int i = 0; i < int(funcs.size()); i++)
+        {
+            auto point = Point(value, i);
+            if (!point.valid)
+                continue;
+            ldvec2 pos = (point.pos + offset) * scale;
+            if ((abs(pos) > win.Size()/2).any())
+                continue;
+            Draw::Dot(type, pos, funcs[i].color);
+        }
     }
 
 
@@ -794,7 +803,7 @@ class Plot
         default_offset += ViewportPos() / default_scale / 2;
         offset = default_offset;
     }
-    Plot(func_t func, long double a, long double b, int flags) : func(std::move(func)), flags(flags), range_start(a), range_len(b - a)
+    Plot(const std::vector<Func> &funcs, long double a, long double b, int flags) : funcs(funcs), flags(flags), range_start(a), range_len(b - a)
     {
         RecalculateDefaultOffsetAndScale();
         offset = default_offset;
@@ -803,7 +812,7 @@ class Plot
 
     explicit operator bool() const
     {
-        return bool(func);
+        return funcs.size() > 0;
     }
 
     void Tick(int count)
@@ -819,7 +828,7 @@ class Plot
             ResetAccumulator();
         }
 
-        if (func)
+        if (funcs.size() > 0)
         {
             // Draw points
             while (count-- > 0)
@@ -830,7 +839,7 @@ class Plot
                 {
                     if (current_value_max_index == 1)
                     {
-                        AddPoint(2, range_start);
+                        AddPoint(3, range_start);
                         AddPoint(2, range_start+range_len);
                     }
                     current_value_index = 0;
@@ -851,14 +860,15 @@ class Plot
 
     void RecalculateDefaultOffsetAndScale()
     {
-        if (!bool(func))
+        if (!bool(*this))
             return;
 
         ldvec2 box_min(0), box_max(0);
 
-        for (int i = 0; i <= bounding_box_segment_count; i++)
+        for (int i = 0; i < int(funcs.size()); i++)
+        for (int j = 0; j <= bounding_box_segment_count; j++)
         {
-            auto point = Point(i / double(bounding_box_segment_count) * range_len + range_start);
+            auto point = Point(j / double(bounding_box_segment_count) * range_len + range_start, i);
             if (!point.valid)
                 continue;
 
@@ -1241,6 +1251,7 @@ class TextField
 int main(int, char **)
 {
     const std::string default_expression = "0";
+    constexpr fvec3 plot_color = fvec3(0.9,0,0.66);
 
     Draw::Init();
 
@@ -1248,7 +1259,7 @@ int main(int, char **)
     Graphics::Clear(Graphics::color);
     Draw::Accumulator::Overwrite();
 
-    enum class State {main};
+    enum class State {main, real_imag};
     State cur_state = State::main;
 
     long double freq_min = Plot::default_min, freq_max = Plot::default_max;
@@ -1256,42 +1267,31 @@ int main(int, char **)
     Expression e(default_expression);
 
     auto func_main = [&e](long double t){return e.EvalVec({0,t});};
+    auto func_real = [&e](long double t){return ldvec2(t,e.EvalVec({0,t}).x);};
+    auto func_imag = [&e](long double t){return ldvec2(t,e.EvalVec({0,t}).y);};
 
     Plot plot;
 
-    auto PlotFlags = [&]() -> int
+    static auto PlotFlags = [&]() -> int
     {
         switch (cur_state)
         {
           case State::main:
             return Plot::lock_scale_ratio;
+          default:
+            return 0;
         }
         return 0;
     };
 
-    auto ResetPlot = [&]
-    {
-        if (!bool(e))
-            plot = Plot(PlotFlags());
-        else
-        {
-            switch (cur_state)
-            {
-              case State::main:
-                plot = Plot(func_main, freq_min, freq_max, PlotFlags());
-                break;
-            }
-        }
-    };
+    std::list<Button> buttons;
+    std::list<TextField> text_fields;
 
-    ResetPlot();
+    enum class InterfaceObj {func_input, range_input, scale_xy, scale, mode};
 
-    std::vector<Button> buttons;
-    std::vector<TextField> text_fields;
+    bool need_interface_reset = 0;
 
-    enum class InterfacePack {func_input, range_input, scale_xy, scale, mode};
-
-    auto AddInterface = [&](InterfacePack category)
+    static auto AddInterface = [&](InterfaceObj category)
     {
         constexpr float scale_factor = 1.01;
 
@@ -1299,7 +1299,7 @@ int main(int, char **)
 
         switch (category)
         {
-          case InterfacePack::func_input:
+          case InterfaceObj::func_input:
             text_fields.push_back(TextField(ivec2(-1,-1), ivec2(24+range_input_w*2 + input_gap_w*2, 80), 9000, 10, "Передаточная функция W(s)", "01234567890.,+-*/^()sj ", [&](TextField &ref, bool upd)
             {
                 ref.width = win.Size().x - ref.pos.x - 24;
@@ -1321,14 +1321,14 @@ int main(int, char **)
                         ref.invalid_pos = exc.pos;
                         ref.invalid_text = exc.message;
                     }
-                    ResetPlot();
+                    need_interface_reset = 1;
                 }
             }));
             text_fields.back().value = default_expression;
             break;
-          case InterfacePack::range_input:
+          case InterfaceObj::range_input:
             {
-                static auto Lambda = [&](TextField &ref, long double &param)
+                auto Lambda = [&](TextField &ref, long double &param)
                 {
                     if (auto it = ref.value.begin(); it != ref.value.end())
                         ref.value.erase(std::remove(++it, ref.value.end(), '-'), ref.value.end());
@@ -1341,9 +1341,9 @@ int main(int, char **)
                     else if (value_copy == "-")
                         value_copy = "-0";
                     Reflection::from_string(param, value_copy.c_str());
-                    ResetPlot();
+                    need_interface_reset = 1;
                 };
-                text_fields.push_back(TextField(ivec2(-1,-1), ivec2(24, 80), 64, 10, "Мин. частота", "0123456789.-", [&](TextField &ref, bool upd)
+                text_fields.push_back(TextField(ivec2(-1,-1), ivec2(24, 80), 64, 6, "Мин. частота", "0123456789.-", [&, Lambda](TextField &ref, bool upd)
                 {
                     if (upd)
                     {
@@ -1351,7 +1351,7 @@ int main(int, char **)
                     }
                 }));
                 text_fields.back().value = Reflection::to_string(Plot::default_min);
-                text_fields.push_back(TextField(ivec2(-1,-1), ivec2(24+range_input_w+input_gap_w, 80), 64, 10, "Макс. частота", "0123456789.-", [&](TextField &ref, bool upd)
+                text_fields.push_back(TextField(ivec2(-1,-1), ivec2(24+range_input_w+input_gap_w, 80), 64, 6, "Макс. частота", "0123456789.-", [&, Lambda](TextField &ref, bool upd)
                 {
                     if (upd)
                     {
@@ -1361,7 +1361,7 @@ int main(int, char **)
                 text_fields.back().value = Reflection::to_string(Plot::default_max);
             }
             break;
-          case InterfacePack::scale:
+          case InterfaceObj::scale:
             {
                 int x = -32;
                 buttons.push_back(Button(ivec2(1,-1), ivec2(x,32), 0, 0, "Сбросить расположение графика", [&]{plot.ResetOffsetAndScale();})); // Reset offset and scale
@@ -1371,7 +1371,7 @@ int main(int, char **)
                 buttons.push_back(Button(ivec2(1,-1), ivec2(x,32), 1, 1, "Увеличить масштаб", [&]{plot.Scale(ldvec2(1,scale_factor));})); // Increase scale
             }
             break;
-          case InterfacePack::scale_xy:
+          case InterfaceObj::scale_xy:
             {
                 int x = -32;
                 buttons.push_back(Button(ivec2(1,-1), ivec2(x,32), 0, 0, "Сбросить расположение графика", [&]{plot.ResetOffsetAndScale();})); // Reset offset and scale
@@ -1385,23 +1385,51 @@ int main(int, char **)
                 buttons.push_back(Button(ivec2(1,-1), ivec2(x,32), 3, 1, "Увеличить масштаб по оси X", [&]{plot.Scale(ldvec2(scale_factor,1));})); // Increase X scale
             }
             break;
-          case InterfacePack::mode:
+          case InterfaceObj::mode:
             {
-                int x = 128;
+                int x = 32;
                 // Primary mode
-                buttons.push_back(Button(ivec2(-1,-1), ivec2(x,32), 7, 0, "Годограф (АФЧХ)", [&]{
+                buttons.push_back(Button(ivec2(-1,-1), ivec2(x,32), 7, 0, "Годограф", [&]{
                     cur_state = State::main;
-                    ResetPlot();
+                    need_interface_reset = 1;
+                }));
+                x += 48+8;
+                // Real&imaginary mode
+                buttons.push_back(Button(ivec2(-1,-1), ivec2(x,32), 8, 0, "Действительная и мнимая части", [&]{
+                    cur_state = State::real_imag;
+                    need_interface_reset = 1;
                 }));
                 x += 48+8;
             }
             break;
         }
     };
-    AddInterface(InterfacePack::func_input);
-    AddInterface(InterfacePack::range_input);
-    AddInterface(InterfacePack::scale);
-    //AddInterface(InterfacePack::mode);
+
+    auto ResetInterface = [&]()
+    {
+       if (!bool(e))
+            plot = Plot(PlotFlags());
+        else
+        {
+            switch (cur_state)
+            {
+              case State::main:
+                plot = Plot({{func_main, plot_color}}, freq_min, freq_max, PlotFlags());
+                break;
+              case State::real_imag:
+                plot = Plot({{func_real, fvec3(1,0,0)},{func_imag, fvec3(0,1,0)}}, freq_min, freq_max, PlotFlags());
+                break;
+            }
+        }
+
+        buttons = {};
+
+        AddInterface(cur_state == State::main ? InterfaceObj::scale : InterfaceObj::scale_xy);
+        AddInterface(InterfaceObj::mode);
+    };
+    AddInterface(InterfaceObj::func_input);
+    AddInterface(InterfaceObj::range_input);
+    ResetInterface();
 
     auto Tick = [&]
     {
@@ -1418,10 +1446,16 @@ int main(int, char **)
         for (auto &button : buttons)
             button.Tick(button_pressed);
 
+        if (need_interface_reset)
+        {
+            need_interface_reset = 0;
+            ResetInterface();
+        }
+
         if (button_pressed)
             plot.Grab();
 
-        plot.Tick(128);
+        plot.Tick(127); // This should be `2^n - 1` for plot to look pretty while moving.
 
         Draw::Accumulator::Overwrite();
     };

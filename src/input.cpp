@@ -160,7 +160,10 @@ namespace Input
                 ref = {};
 
             int old_len = u8strlen(ref);
-            clamp_assign(text_cursor_pos += Keys::right.repeated() - Keys::left.repeated(), 0, old_len);
+            text_cursor_pos += Keys::right.repeated() - Keys::left.repeated();
+            if (Keys::home.repeated()) text_cursor_pos = 0;
+            if (Keys::end.repeated()) text_cursor_pos = old_len;
+            clamp_assign(text_cursor_pos, 0, old_len);
 
             text_cursor_byte_pos = 0;
             int index = 0;
