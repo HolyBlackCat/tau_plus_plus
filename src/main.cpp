@@ -693,6 +693,8 @@ class Expression
 class Plot
 {
   public:
+    enum Flags {lock_scale_ratio = 1, vertical_pi = 2};
+
     using func_t = std::function<ldvec2(long double)>;
     constexpr static long double default_scale_factor = 100,
                                  default_min = 0,
@@ -721,6 +723,8 @@ class Plot
                            grid_large_line_color = 0.55,
                            grid_mid_line_color   = 0.8,
                            grid_small_line_color = 0.85;
+
+    static constexpr fvec3 secondary_color = fvec3(0.45);
 
 
     using distr_t = std::uniform_real_distribution<long double>;
@@ -759,6 +763,8 @@ class Plot
         ret.pos = funcs[func_index].func(freq);
         ret.valid = std::isfinite(ret.pos.x) && std::isfinite(ret.pos.y);
         ret.pos.y = -ret.pos.y;
+        if (flags & vertical_pi)
+            ret.pos.y /= ld_pi;
         return ret;
     }
 
@@ -782,21 +788,31 @@ class Plot
 
     void AddPoint(int type, long double value)
     {
-        for (int i = 0; i < int(funcs.size()); i++)
+        auto Lambda = [&](bool custom, ldvec2 off)
         {
-            auto point = Point(value, i);
-            if (!point.valid)
-                continue;
-            ldvec2 pos = (point.pos + offset) * scale;
-            if ((abs(pos) > win.Size()/2).any())
-                continue;
-            Draw::Dot(type, pos, funcs[i].color);
+            for (int i = 0; i < int(funcs.size()); i++)
+            {
+                auto point = Point(value, i);
+                if (!point.valid)
+                    continue;
+                ldvec2 pos = (point.pos + offset) * scale;
+                if (custom)
+                    pos += off;
+                if ((abs(pos) > win.Size()/2).any())
+                    continue;
+                Draw::Dot(custom ? 4 : type, pos, custom ? secondary_color : funcs[i].color);
+            }
+        };
+
+        Lambda(0, {});
+        if (flags & vertical_pi)
+        {
+            Lambda(1, ldvec2(0, scale.y*2));
+            Lambda(1, ldvec2(0,-scale.y*2));
         }
     }
 
-
   public:
-    enum Flags {lock_scale_ratio = 1};
 
     Plot(int flags = 0) : flags(flags)
     {
@@ -973,8 +989,11 @@ class Plot
                         char string_buf[64] = "0";
                         if (!zero_line)
                             std::snprintf(string_buf, sizeof string_buf, "%.*Lg", grid_max_number_precision, value);
+                        std::string str = string_buf;
+                        if (flags & vertical_pi && !vertical)
+                            str += " п";
 
-                        r.Text(pixel_pos, string_buf).align(ivec2(-1,1)).font(font_small).color(large_line ? grid_text_color : grid_light_text_color);
+                        r.Text(pixel_pos, str).align(ivec2(-1,1)).font(font_small).color(large_line ? grid_text_color : grid_light_text_color);
                     }
                 }
             };
@@ -1259,16 +1278,18 @@ int main(int, char **)
     Graphics::Clear(Graphics::color);
     Draw::Accumulator::Overwrite();
 
-    enum class State {main, real_imag};
+    enum class State {main, real_imag, amplitude, phase};
     State cur_state = State::main;
 
     long double freq_min = Plot::default_min, freq_max = Plot::default_max;
 
     Expression e(default_expression);
 
-    auto func_main = [&e](long double t){return e.EvalVec({0,t});};
-    auto func_real = [&e](long double t){return ldvec2(t,e.EvalVec({0,t}).x);};
-    auto func_imag = [&e](long double t){return ldvec2(t,e.EvalVec({0,t}).y);};
+    auto func_main  = [&e](long double t){return e.EvalVec({0,t});};
+    auto func_real  = [&e](long double t){return ldvec2(t,e.EvalVec({0,t}).x);};
+    auto func_imag  = [&e](long double t){return ldvec2(t,e.EvalVec({0,t}).y);};
+    auto func_ampl  = [&e](long double t){return ldvec2(t,e.EvalVec({0,t}).len());};
+    auto func_phase = [&e](long double t){auto v = e.EvalVec({0,t}); return ldvec2(t,std::atan2(v.y,v.x));};
 
     Plot plot;
 
@@ -1278,6 +1299,8 @@ int main(int, char **)
         {
           case State::main:
             return Plot::lock_scale_ratio;
+          case State::phase:
+            return Plot::vertical_pi;
           default:
             return 0;
         }
@@ -1400,6 +1423,18 @@ int main(int, char **)
                     need_interface_reset = 1;
                 }));
                 x += 48+8;
+                // Amplitude mode
+                buttons.push_back(Button(ivec2(-1,-1), ivec2(x,32), 9, 0, "Амплитуда", [&]{
+                    cur_state = State::amplitude;
+                    need_interface_reset = 1;
+                }));
+                x += 48+8;
+                // Phase mode
+                buttons.push_back(Button(ivec2(-1,-1), ivec2(x,32), 10, 0, "Фаза", [&]{
+                    cur_state = State::phase;
+                    need_interface_reset = 1;
+                }));
+                x += 48+8;
             }
             break;
         }
@@ -1417,7 +1452,13 @@ int main(int, char **)
                 plot = Plot({{func_main, plot_color}}, freq_min, freq_max, PlotFlags());
                 break;
               case State::real_imag:
-                plot = Plot({{func_real, fvec3(1,0,0)},{func_imag, fvec3(0,1,0)}}, freq_min, freq_max, PlotFlags());
+                plot = Plot({{func_real, fvec3(0.9,0.2,0)},{func_imag, fvec3(0.2,0.9,0)}}, freq_min, freq_max, PlotFlags());
+                break;
+              case State::amplitude:
+                plot = Plot({{func_ampl, fvec3(0.9,0.4,0)}}, freq_min, freq_max, PlotFlags());
+                break;
+              case State::phase:
+                plot = Plot({{func_phase, fvec3(0,0.4,0.9)}}, freq_min, freq_max, PlotFlags());
                 break;
             }
         }
