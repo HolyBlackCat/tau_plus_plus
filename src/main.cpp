@@ -693,7 +693,13 @@ class Expression
 class Plot
 {
   public:
-    enum Flags {lock_scale_ratio = 1, vertical_pi = 2};
+    enum Flags
+    {
+        lock_scale_ratio = 1,
+        vertical_pi      = 2,
+        horizontal_log10 = 4,
+        vertical_20log10 = 8,
+    };
 
     using func_t = std::function<ldvec2(long double)>;
     constexpr static long double default_scale_factor = 100,
@@ -761,10 +767,14 @@ class Plot
     {
         PointData ret;
         ret.pos = funcs[func_index].func(freq);
-        ret.valid = std::isfinite(ret.pos.x) && std::isfinite(ret.pos.y);
-        ret.pos.y = -ret.pos.y;
         if (flags & vertical_pi)
             ret.pos.y /= ld_pi;
+        if (flags & horizontal_log10)
+            ret.pos.x = std::log10(ret.pos.x);
+        if (flags & vertical_20log10)
+            ret.pos.y = std::log10(ret.pos.y);
+        ret.pos.y = -ret.pos.y;
+        ret.valid = std::isfinite(ret.pos.x) && std::isfinite(ret.pos.y);
         return ret;
     }
 
@@ -984,14 +994,29 @@ class Plot
                         pixel_pos += (vertical ? grid_number_offset_v : grid_number_offset_h);
 
                         if (!vertical)
+                        {
                             value = -value;
 
+                            if (flags & vertical_20log10)
+                                value *= 20;
+                        }
+
                         char string_buf[64] = "0";
-                        if (!zero_line)
+                        if (!zero_line || (vertical && (flags & horizontal_log10)))
                             std::snprintf(string_buf, sizeof string_buf, "%.*Lg", grid_max_number_precision, value);
                         std::string str = string_buf;
-                        if (flags & vertical_pi && !vertical)
-                            str += " п";
+                        if (!vertical)
+                        {
+                            if (flags & vertical_pi)
+                                str += " п";
+                            if (flags & vertical_20log10)
+                                str += " дБ";
+                        }
+                        else
+                        {
+                            if (flags & horizontal_log10)
+                                str += "^10";
+                        }
 
                         r.Text(pixel_pos, str).align(ivec2(-1,1)).font(font_small).color(large_line ? grid_text_color : grid_light_text_color);
                     }
@@ -1063,15 +1088,6 @@ class Plot
         scale_changed_this_tick = 1;
 
         ResetAccumulator();
-    }
-
-    void SetGridScaleStepFactor(ldvec2 value)
-    {
-        grid_scale_step_factor = value;
-    }
-    void SetGridCellSegments(ivec2 value)
-    {
-        grid_cell_segments = value;
     }
 };
 
@@ -1278,7 +1294,7 @@ int main(int, char **)
     Graphics::Clear(Graphics::color);
     Draw::Accumulator::Overwrite();
 
-    enum class State {main, real_imag, amplitude, phase};
+    enum class State {main, real_imag, amplitude, phase, amplitude_log10, phase_log10};
     State cur_state = State::main;
 
     long double freq_min = Plot::default_min, freq_max = Plot::default_max;
@@ -1301,6 +1317,10 @@ int main(int, char **)
             return Plot::lock_scale_ratio;
           case State::phase:
             return Plot::vertical_pi;
+          case State::amplitude_log10:
+            return Plot::vertical_20log10 | Plot::horizontal_log10;
+          case State::phase_log10:
+            return Plot::vertical_pi | Plot::horizontal_log10;
           default:
             return 0;
         }
@@ -1310,7 +1330,7 @@ int main(int, char **)
     std::list<Button> buttons;
     std::list<TextField> text_fields;
 
-    enum class InterfaceObj {func_input, range_input, scale_xy, scale, mode};
+    enum class InterfaceObj {func_input, range_input, scale_xy, scale, mode, make_table};
 
     bool need_interface_reset = 0;
 
@@ -1414,33 +1434,50 @@ int main(int, char **)
                     cur_state = State::main;
                     need_interface_reset = 1;
                 }));
-                x += 48+8;
+                x += 48;
                 // Real&imaginary mode
                 buttons.push_back(Button(ivec2(-1,-1), ivec2(x,32), 8, 0, "Действительная и мнимая части", [&]{
                     cur_state = State::real_imag;
                     need_interface_reset = 1;
                 }));
-                x += 48+8;
+                x += 48;
                 // Amplitude mode
                 buttons.push_back(Button(ivec2(-1,-1), ivec2(x,32), 9, 0, "Амплитуда", [&]{
                     cur_state = State::amplitude;
                     need_interface_reset = 1;
                 }));
-                x += 48+8;
+                x += 48;
                 // Phase mode
                 buttons.push_back(Button(ivec2(-1,-1), ivec2(x,32), 10, 0, "Фаза", [&]{
                     cur_state = State::phase;
                     need_interface_reset = 1;
                 }));
-                x += 48+8;
+                x += 48;
+                // Amplitude log10 mode
+                buttons.push_back(Button(ivec2(-1,-1), ivec2(x,32), 11, 0, "Амплитуда (в децибелах) от логарифма частоты", [&]{
+                    cur_state = State::amplitude_log10;
+                    need_interface_reset = 1;
+                }));
+                x += 48;
+                // Phase log10 mode
+                buttons.push_back(Button(ivec2(-1,-1), ivec2(x,32), 12, 0, "Фаза от логарифма частоты", [&]{
+                    cur_state = State::phase_log10;
+                    need_interface_reset = 1;
+                }));
             }
+            break;
+          case InterfaceObj::make_table:
+            // Phase log10 mode
+            buttons.push_back(Button(ivec2(-1,-1), ivec2(336,32), 13, 0, "Создать таблицу значений характеристик", [&]{
+
+            }));
             break;
         }
     };
 
     auto ResetInterface = [&]()
     {
-       if (!bool(e))
+        if (!bool(e))
             plot = Plot(PlotFlags());
         else
         {
@@ -1458,6 +1495,12 @@ int main(int, char **)
               case State::phase:
                 plot = Plot({{func_phase, fvec3(0,0.4,0.9)}}, freq_min, freq_max, PlotFlags());
                 break;
+              case State::amplitude_log10:
+                plot = Plot({{func_ampl, fvec3(0.9,0.4,0)}}, freq_min, freq_max, PlotFlags());
+                break;
+              case State::phase_log10:
+                plot = Plot({{func_phase, fvec3(0,0.4,0.9)}}, freq_min, freq_max, PlotFlags());
+                break;
             }
         }
 
@@ -1465,6 +1508,7 @@ int main(int, char **)
 
         AddInterface(cur_state == State::main ? InterfaceObj::scale : InterfaceObj::scale_xy);
         AddInterface(InterfaceObj::mode);
+        AddInterface(InterfaceObj::make_table);
     };
     AddInterface(InterfaceObj::func_input);
     AddInterface(InterfaceObj::range_input);
@@ -1491,6 +1535,9 @@ int main(int, char **)
             ResetInterface();
         }
 
+        if (mouse.pos().y + win.Size().y/2 < interface_rect_height)
+            button_pressed = 0;
+
         if (button_pressed)
             plot.Grab();
 
@@ -1512,6 +1559,9 @@ int main(int, char **)
         // Text fields
         for (auto &text_field : text_fields)
             text_field.Render();
+
+        // Mode indicator
+        r.Quad(-win.Size()/2 + ivec2(32).add_x(48 * int(cur_state)), ivec2(50)).color(fvec3(0)).center();
 
         // Buttons
         for (const auto &button : buttons)
