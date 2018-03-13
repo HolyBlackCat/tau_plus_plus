@@ -1015,10 +1015,33 @@ class Plot
                         else
                         {
                             if (flags & horizontal_log10)
-                                str += "^10";
+                                str = "{10 }" + str;
                         }
 
-                        r.Text(pixel_pos, str).align(ivec2(-1,1)).font(font_small).color(large_line ? grid_text_color : grid_light_text_color);
+                        r.Text(pixel_pos, str).align(ivec2(-1,1)).font(font_small).color(large_line ? grid_text_color : grid_light_text_color).callback(
+                        [sup = false](const Renderers::Poly2D::Text_t::CallbackParams &params) mutable
+                        {
+                            if (params.ch == '{' || params.ch == '}')
+                            {
+                                sup = (params.ch == '{');
+                                params.glyph.advance = 0;
+                                if (params.render_pass)
+                                    params.render.clear();
+                            }
+                            else if (sup)
+                            {
+                                constexpr float scale = 0.82;
+                                params.glyph.advance = iround(params.glyph.advance * scale);
+                                if (params.render_pass)
+                                {
+                                    fmat3 m = fmat3(scale, 0, 0,
+                                                    0, scale, params.obj.state().ch_map->Height() / 3,
+                                                    0, 0, 1);
+                                    for (auto &it : params.render)
+                                        it.matrix = it.matrix /mul/ m;
+                                }
+                            }
+                        });
                     }
                 }
             };
