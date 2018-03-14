@@ -9,7 +9,7 @@
 
 Events::AutoErrorHandlers error_handlers;
 
-Window win("TAU++", ivec2(800,600), Window::Settings{}.GlVersion(2,1).GlProfile(Window::any_profile).Resizable().MinSize(ivec2(640,480)));
+Window win("TAU++", ivec2(800,600), Window::Settings{}.GlVersion(2,1).GlProfile(Window::any_profile).Resizable().MinSize(ivec2(800,600)));
 Timing::TickStabilizer tick_stabilizer(60);
 
 Renderers::Poly2D r;
@@ -91,12 +91,17 @@ namespace Draw
         }
         [[nodiscard]] auto WithWhiteBackground(Renderers::Poly2D::Text_t &ref) // A preset
         {
+            constexpr int up = 1, down = 1, sides = 3;
             ref.callback([&](const Renderers::Poly2D::Text_t::CallbackParams &params) mutable
             {
                 if (params.render_pass)
                 {
                     auto *ch_map = params.obj.state().ch_map;
-                    r.Quad(params.pos.sub_y(ch_map->Ascent()+1), ivec2(params.glyph.advance, ch_map->Height()+2)).color(fvec3(1)).alpha(0.9);
+                    bool first = params.index == 0,
+                         last = params.index == int(params.obj.state().str.size()) - 1;
+                    int kerning = params.obj.state().ch_map->Kerning(params.prev, params.ch);
+                    r.Quad(params.pos - ivec2(sides * first + kerning, ch_map->Ascent()+up),
+                           ivec2(params.glyph.advance + sides * (first + last) + kerning, ch_map->Height()+up+down)).color(fvec3(1)).alpha(0.5);
                 }
             });
         }
@@ -1122,8 +1127,8 @@ class Plot
             for (const auto &func : funcs)
             {
                 ivec2 pos(Draw::max.x - gap, Draw::min.y + y);
-                r.Text(pos, func.name).color(func.color).align(ivec2(1,-1)).preset(Draw::SupSub).font(font_small).preset(Draw::WithWhiteBackground);
-                y += gap + font_small.Height();
+                r.Text(pos, func.name).color(func.color).align(ivec2(1,-1)).preset(Draw::SupSub).preset(Draw::WithWhiteBackground);
+                y += gap + font_main.Height();
             }
             r.Finish();
         }
@@ -1566,19 +1571,19 @@ int main(int, char **)
                 plot = Plot({{func_main, plot_color, "W(j·w)"}}, freq_min, freq_max, PlotFlags());
                 break;
               case State::real_imag:
-                plot = Plot({{func_real, fvec3(0.9,0.2,0), "P(w)"},{func_imag, fvec3(0.2,0.9,0), "Q(w)"}}, freq_min, freq_max, PlotFlags());
+                plot = Plot({{func_real, fvec3(0.9,0.2,0), "P(w)"},{func_imag, fvec3(0.2,0.7,0), "Q(w)"}}, freq_min, freq_max, PlotFlags());
                 break;
               case State::amplitude:
                 plot = Plot({{func_ampl, fvec3(0.9,0.4,0), "A(w)"}}, freq_min, freq_max, PlotFlags());
                 break;
               case State::phase:
-                plot = Plot({{func_phase, fvec3(0,0.4,0.9), "ф(w)"}}, freq_min, freq_max, PlotFlags());
+                plot = Plot({{func_phase, fvec3(0,0.7,0.9), "ф(w)"}}, freq_min, freq_max, PlotFlags());
                 break;
               case State::amplitude_log10:
                 plot = Plot({{func_ampl, fvec3(0.9,0.4,0), "20·log{10} A(log{10} w)"}}, freq_min, freq_max, PlotFlags());
                 break;
               case State::phase_log10:
-                plot = Plot({{func_phase, fvec3(0,0.4,0.9), "ф(log{10} w)"}}, freq_min, freq_max, PlotFlags());
+                plot = Plot({{func_phase, fvec3(0,0.7,0.9), "ф(log{10} w)"}}, freq_min, freq_max, PlotFlags());
                 break;
             }
         }
