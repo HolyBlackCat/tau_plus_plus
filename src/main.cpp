@@ -56,6 +56,50 @@ namespace Draw
                 });
             };
         }
+        [[nodiscard]] auto SupSub(Renderers::Poly2D::Text_t &ref) // A preset
+        {
+            ref.callback([sup = false, sub = false](const Renderers::Poly2D::Text_t::CallbackParams &params) mutable
+            {
+                if (params.ch == '{' || params.ch == '}')
+                {
+                    sup = (params.ch == '{');
+                    params.glyph.advance = 0;
+                    if (params.render_pass)
+                        params.render.clear();
+                }
+                else if (params.ch == '[' || params.ch == ']')
+                {
+                    sub = (params.ch == '[');
+                    params.glyph.advance = 0;
+                    if (params.render_pass)
+                        params.render.clear();
+                }
+                else if (sup || sub)
+                {
+                    constexpr float scale = 0.82;
+                    params.glyph.advance = iround(params.glyph.advance * scale);
+                    if (params.render_pass)
+                    {
+                        fmat3 m = fmat3(scale, 0, 0,
+                                        0, scale, (sup - sub) * params.obj.state().ch_map->Height() / 3,
+                                        0, 0, 1);
+                        for (auto &it : params.render)
+                            it.matrix = it.matrix /mul/ m;
+                    }
+                }
+            });
+        }
+        [[nodiscard]] auto WithWhiteBackground(Renderers::Poly2D::Text_t &ref) // A preset
+        {
+            ref.callback([&](const Renderers::Poly2D::Text_t::CallbackParams &params) mutable
+            {
+                if (params.render_pass)
+                {
+                    auto *ch_map = params.obj.state().ch_map;
+                    r.Quad(params.pos.sub_y(ch_map->Ascent()+1), ivec2(params.glyph.advance, ch_map->Height()+2)).color(fvec3(1)).alpha(0.9);
+                }
+            });
+        }
     }
 
     namespace Accumulator
@@ -710,6 +754,7 @@ class Plot
     {
         func_t func;
         fvec3 color;
+        std::string name;
     };
 
   private:
@@ -1040,30 +1085,7 @@ class Plot
                                 str = "{10 }" + str;
                         }
 
-                        r.Text(pixel_pos, str).align(ivec2(-1,1)).font(font_small).color(large_line ? grid_text_color : grid_light_text_color).callback(
-                        [sup = false](const Renderers::Poly2D::Text_t::CallbackParams &params) mutable
-                        {
-                            if (params.ch == '{' || params.ch == '}')
-                            {
-                                sup = (params.ch == '{');
-                                params.glyph.advance = 0;
-                                if (params.render_pass)
-                                    params.render.clear();
-                            }
-                            else if (sup)
-                            {
-                                constexpr float scale = 0.82;
-                                params.glyph.advance = iround(params.glyph.advance * scale);
-                                if (params.render_pass)
-                                {
-                                    fmat3 m = fmat3(scale, 0, 0,
-                                                    0, scale, params.obj.state().ch_map->Height() / 3,
-                                                    0, 0, 1);
-                                    for (auto &it : params.render)
-                                        it.matrix = it.matrix /mul/ m;
-                                }
-                            }
-                        });
+                        r.Text(pixel_pos, str).align(ivec2(-1,1)).font(font_small).color(large_line ? grid_text_color : grid_light_text_color).preset(Draw::SupSub);
                     }
                 }
             };
@@ -1091,6 +1113,18 @@ class Plot
             Graphics::Blending::Equation(Graphics::Blending::eq_add);
             lambda(1, &ldvec2::x, &ldvec2::y, &ivec2::x, &ivec2::y);
             lambda(1, &ldvec2::y, &ldvec2::x, &ivec2::y, &ivec2::x);
+            r.Finish();
+        }
+
+        { // Curve names
+            constexpr int gap = 3;
+            int y = ViewportPos().y + gap;
+            for (const auto &func : funcs)
+            {
+                ivec2 pos(Draw::max.x - gap, Draw::min.y + y);
+                r.Text(pos, func.name).color(func.color).align(ivec2(1,-1)).preset(Draw::SupSub).font(font_small).preset(Draw::WithWhiteBackground);
+                y += gap + font_small.Height();
+            }
             r.Finish();
         }
 
@@ -1529,22 +1563,22 @@ int main(int, char **)
             switch (cur_state)
             {
               case State::main:
-                plot = Plot({{func_main, plot_color}}, freq_min, freq_max, PlotFlags());
+                plot = Plot({{func_main, plot_color, "W(j·w)"}}, freq_min, freq_max, PlotFlags());
                 break;
               case State::real_imag:
-                plot = Plot({{func_real, fvec3(0.9,0.2,0)},{func_imag, fvec3(0.2,0.9,0)}}, freq_min, freq_max, PlotFlags());
+                plot = Plot({{func_real, fvec3(0.9,0.2,0), "P(w)"},{func_imag, fvec3(0.2,0.9,0), "Q(w)"}}, freq_min, freq_max, PlotFlags());
                 break;
               case State::amplitude:
-                plot = Plot({{func_ampl, fvec3(0.9,0.4,0)}}, freq_min, freq_max, PlotFlags());
+                plot = Plot({{func_ampl, fvec3(0.9,0.4,0), "A(w)"}}, freq_min, freq_max, PlotFlags());
                 break;
               case State::phase:
-                plot = Plot({{func_phase, fvec3(0,0.4,0.9)}}, freq_min, freq_max, PlotFlags());
+                plot = Plot({{func_phase, fvec3(0,0.4,0.9), "ф(w)"}}, freq_min, freq_max, PlotFlags());
                 break;
               case State::amplitude_log10:
-                plot = Plot({{func_ampl, fvec3(0.9,0.4,0)}}, freq_min, freq_max, PlotFlags());
+                plot = Plot({{func_ampl, fvec3(0.9,0.4,0), "20·log{10} A(log{10} w)"}}, freq_min, freq_max, PlotFlags());
                 break;
               case State::phase_log10:
-                plot = Plot({{func_phase, fvec3(0,0.4,0.9)}}, freq_min, freq_max, PlotFlags());
+                plot = Plot({{func_phase, fvec3(0,0.4,0.9), "ф(log{10} w)"}}, freq_min, freq_max, PlotFlags());
                 break;
             }
         }
