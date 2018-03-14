@@ -718,6 +718,7 @@ class Plot
 
     static constexpr int bounding_box_segment_count = 512,
                          grid_max_number_precision = 6;
+    static constexpr float bounding_box_discarded_edges = 0.03; // Must be less than 0.5
 
     static constexpr ivec2 min_grid_cell_pixel_size = ivec2(48),
                            grid_number_offset_h     = ivec2(8,0),
@@ -890,20 +891,41 @@ class Plot
             return;
 
         ldvec2 box_min(0), box_max(0);
+        std::vector<long double> values_x, values_y;
+        for (auto *it : {&values_x, &values_y})
+            it->reserve(bounding_box_segment_count + 1);
 
         for (int i = 0; i < int(funcs.size()); i++)
-        for (int j = 0; j <= bounding_box_segment_count; j++)
         {
-            auto point = Point(j / double(bounding_box_segment_count) * range_len + range_start, i);
-            if (!point.valid)
-                continue;
+            for (auto *it : {&values_x, &values_y})
+                it->clear();
 
-            for (auto mem : {&ldvec2::x, &ldvec2::y})
+            for (int j = 0; j <= bounding_box_segment_count; j++)
             {
-                if (point.pos.*mem < box_min.*mem)
-                    box_min.*mem = point.pos.*mem;
-                else if (point.pos.*mem > box_max.*mem)
-                    box_max.*mem = point.pos.*mem;
+                auto point = Point(j / double(bounding_box_segment_count) * range_len + range_start, i);
+                if (!point.valid)
+                    continue;
+
+                values_x.push_back(point.pos.x);
+                values_y.push_back(point.pos.y);
+            }
+
+            if (values_x.size() > 0)
+            {
+                for (auto *it : {&values_x, &values_y})
+                    std::sort(it->begin(), it->end());
+
+                int index_min = iround(values_x.size() * bounding_box_discarded_edges),
+                    index_max = iround(values_x.size() * (1-bounding_box_discarded_edges));
+                ldvec2 a(values_x[index_min], values_y[index_min]),
+                       b(values_x[index_max], values_y[index_max]);
+                for (auto mem : {&ldvec2::x, &ldvec2::y})
+                {
+                    if (a.*mem < box_min.*mem)
+                        box_min.*mem = a.*mem;
+                    if (b.*mem > box_max.*mem)
+                        box_max.*mem = b.*mem;
+                }
             }
         }
 
