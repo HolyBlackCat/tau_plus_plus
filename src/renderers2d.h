@@ -734,7 +734,7 @@ namespace Renderers
                               case '\t':
                                 {
                                     int tab_pixels = obj_state.tab_width * obj_state.ch_map->Get(' ').advance;
-                                    pos.x = (pos.x - line_offset_x + tab_pixels - 1) / tab_pixels * tab_pixels;
+                                    pos.x = (pos.x - line_offset_x + tab_pixels) / tab_pixels * tab_pixels;
                                     prev_ch = '\t';
                                 }
                                 break;

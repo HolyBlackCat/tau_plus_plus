@@ -35,10 +35,10 @@ namespace Draw
             {
                 obj.callback([=](Renderers::Poly2D::Text_t::CallbackParams params)
                 {
-                    constexpr int width = 1;
+                    constexpr int left = 1, right = 1;
                     if (params.render_pass && params.index == index)
                     {
-                        r.Quad(params.pos - ivec2(width, params.obj.state().ch_map->Ascent()), ivec2(1, params.obj.state().ch_map->Height()))
+                        r.Quad(params.pos - ivec2(left, params.obj.state().ch_map->Ascent()), ivec2(left + right, params.obj.state().ch_map->Height()))
                          .color(color).alpha(params.render[0].alpha).beta(params.render[0].beta);
                     }
                 });
@@ -209,12 +209,14 @@ namespace Draw
             type -= 2;
         r.Quad(pos, ivec2(13)).tex(ivec2(2+type*16,2+y*16)).center().color(color).mix(0).alpha(alpha).beta(beta);
     }
-    void Line(int type, fvec2 a, fvec2 b, fvec3 color, float alpha = 1, float beta = 1)
-    {
-        int len = iround((b - a).len());
 
-        for (int i = 0; i <= len; i++)
-            Dot(type, a + (b - a) * i / len, color, alpha, beta);
+    void Overlay(int type = 0)
+    {
+        constexpr int tex_sz = 64;
+        ivec2 size = (win.Size() + tex_sz - 1) / tex_sz;
+        for (int y = 0; y < size.y; y++)
+        for (int x = 0; x < size.x; x++)
+            r.Quad(min + ivec2(x,y)*tex_sz, ivec2(tex_sz)).tex(ivec2(type*64, 128));
     }
 }
 
@@ -519,13 +521,14 @@ class Expression
                         new_token.type = Token::num;
                         new_token.num_value = -1;
                         it = list.insert(it, new_token);
+                        break;
                     }
-                    else
+                    else if (std::next(it) != list.end())
                     {
                         it = list.erase(it);
                         increment_iter = 0;
+                        break;
                     }
-                    break;
                 }
                 if (it == prev || prev->type == Token::op || prev->type == Token::lparen)
                 {
@@ -1074,7 +1077,7 @@ class Plot
                         }
 
                         char string_buf[64] = "0";
-                        if (!zero_line || (vertical && (flags & horizontal_log10)))
+                        if (!zero_line)
                             std::snprintf(string_buf, sizeof string_buf, "%.*Lg", grid_max_number_precision, value);
                         std::string str = string_buf;
                         if (!vertical)
@@ -1200,7 +1203,7 @@ class Button
     Button(ivec2 location, ivec2 pos, int icon_index, bool holdable, std::string tooltip, std::function<void(void)> func)
         : location(location), pos(pos), icon_index(icon_index), visible(1), holdable(holdable), tooltip(tooltip), func(std::move(func)) {}
 
-    void Tick(bool &button_pressed)
+    void Tick(bool &button_pressed, bool ignore_hover)
     {
         constexpr int half_extent = 24;
 
@@ -1212,7 +1215,7 @@ class Button
         }
 
         ivec2 screen_pos = ScreenPos();
-        hovered = (mouse.pos() >= screen_pos - half_extent).all() && (mouse.pos() < screen_pos + half_extent).all();
+        hovered = !ignore_hover && (mouse.pos() >= screen_pos - half_extent).all() && (mouse.pos() < screen_pos + half_extent).all();
 
         if (hovered)
             current_tooltip = tooltip;
@@ -1312,6 +1315,10 @@ class TextField
         active_id = -1;
         Input::Text(0);
     }
+    bool Active() const
+    {
+        return id == active_id;
+    }
 
     void Tick(bool &button_pressed)
     {
@@ -1343,9 +1350,13 @@ class TextField
         ivec2 screen_pos = ScreenPos(),
               screen_size = ScreenSize();
 
+        bool selected = id == active_id;
+
         // Box
+        if (selected)
+            r.Quad(screen_pos-1, screen_size+2).color(fvec3(0)).alpha(0.5);
         r.Quad(screen_pos, screen_size).color(fvec3(0));
-        r.Quad(screen_pos+1, screen_size-2).color(fvec3(0.95));
+        r.Quad(screen_pos+1, screen_size-2).color(fvec3(1));
 
         // Title
         r.Text(screen_pos, title).color(title_color).font(font_small).align(ivec2(-1,1));
@@ -1357,7 +1368,7 @@ class TextField
             auto text = r.Text(screen_pos + ivec2(text_offset_x, height/2), value).align_h(-1).font(font_small).color(fvec3(0));
             if (invalid)
                 text.preset(Draw::ColorAfterPos(invalid_pos, invalid_color));
-            if (id == active_id && tick_stabilizer.ticks % 60 < 30)
+            if (selected && tick_stabilizer.ticks % 60 < 30)
                 text.preset(Draw::WithCursor(Input::TextCursorPos(), fvec3(0)));
         }
 
@@ -1371,6 +1382,8 @@ int main(int, char **)
 {
     const std::string default_expression = "0";
     constexpr fvec3 plot_color = fvec3(0.9,0,0.66);
+    constexpr ivec2 table_gui_rect_size(400,300), table_gui_offset(64,80);
+    constexpr int table_gui_button_h = 48;
 
     Draw::Init();
 
@@ -1382,6 +1395,8 @@ int main(int, char **)
     State cur_state = State::main;
 
     long double freq_min = Plot::default_min, freq_max = Plot::default_max;
+
+    bool show_table_gui = 0;
 
     Expression e(default_expression);
 
@@ -1417,6 +1432,7 @@ int main(int, char **)
     enum class InterfaceObj {func_input, range_input, scale_xy, scale, mode, make_table};
 
     bool need_interface_reset = 0;
+    TextField *range_input_min = 0, *range_input_max = 0;
 
     static auto AddInterface = [&](InterfaceObj category)
     {
@@ -1468,15 +1484,13 @@ int main(int, char **)
                     Reflection::from_string(param, value_copy.c_str());
                     need_interface_reset = 1;
                 };
-                text_fields.push_back(TextField(ivec2(-1,-1), ivec2(24, 80), 64, 6, "Мин. частота", "0123456789.-", [&, Lambda](TextField &ref, bool upd)
+                range_input_min = &text_fields.emplace_back(TextField(ivec2(-1,-1), ivec2(24, 80), 64, 6, "Мин. частота", "0123456789.-", [&, Lambda](TextField &ref, bool upd)
                 {
                     if (upd)
-                    {
                         Lambda(ref, freq_min);
-                    }
                 }));
                 text_fields.back().value = Reflection::to_string(Plot::default_min);
-                text_fields.push_back(TextField(ivec2(-1,-1), ivec2(24+range_input_w+input_gap_w, 80), 64, 6, "Макс. частота", "0123456789.-", [&, Lambda](TextField &ref, bool upd)
+                range_input_max = &text_fields.emplace_back(TextField(ivec2(-1,-1), ivec2(24+range_input_w+input_gap_w, 80), 64, 6, "Макс. частота", "0123456789.-", [&, Lambda](TextField &ref, bool upd)
                 {
                     if (upd)
                     {
@@ -1490,7 +1504,7 @@ int main(int, char **)
             {
                 int x = -32;
                 buttons.push_back(Button(ivec2(1,-1), ivec2(x,32), 0, 0, "Сбросить расположение графика", [&]{plot.ResetOffsetAndScale();})); // Reset offset and scale
-                x -= 48+8;
+                x -= 48+16;
                 buttons.push_back(Button(ivec2(1,-1), ivec2(x,32), 2, 1, "Уменьшить масштаб", [&]{plot.Scale(ldvec2(1,1/scale_factor));})); // Decrease scale
                 x -= 48;
                 buttons.push_back(Button(ivec2(1,-1), ivec2(x,32), 1, 1, "Увеличить масштаб", [&]{plot.Scale(ldvec2(1,scale_factor));})); // Increase scale
@@ -1500,11 +1514,11 @@ int main(int, char **)
             {
                 int x = -32;
                 buttons.push_back(Button(ivec2(1,-1), ivec2(x,32), 0, 0, "Сбросить расположение графика", [&]{plot.ResetOffsetAndScale();})); // Reset offset and scale
-                x -= 48+8;
+                x -= 48+16;
                 buttons.push_back(Button(ivec2(1,-1), ivec2(x,32), 6, 1, "Уменьшить масштаб по оси Y", [&]{plot.Scale(ldvec2(1,1/scale_factor));})); // Decrease Y scale
                 x -= 48;
                 buttons.push_back(Button(ivec2(1,-1), ivec2(x,32), 5, 1, "Увеличить масштаб по оси Y", [&]{plot.Scale(ldvec2(1,scale_factor));})); // Increase Y scale
-                x -= 48+8;
+                x -= 48+16;
                 buttons.push_back(Button(ivec2(1,-1), ivec2(x,32), 4, 1, "Уменьшить масштаб по оси X", [&]{plot.Scale(ldvec2(1/scale_factor,1));})); // Decrease X scale
                 x -= 48;
                 buttons.push_back(Button(ivec2(1,-1), ivec2(x,32), 3, 1, "Увеличить масштаб по оси X", [&]{plot.Scale(ldvec2(scale_factor,1));})); // Increase X scale
@@ -1553,7 +1567,7 @@ int main(int, char **)
           case InterfaceObj::make_table:
             // Phase log10 mode
             buttons.push_back(Button(ivec2(-1,-1), ivec2(336,32), 13, 0, "Создать таблицу значений характеристик", [&]{
-
+                show_table_gui = 1;
             }));
             break;
         }
@@ -1598,33 +1612,105 @@ int main(int, char **)
     AddInterface(InterfaceObj::range_input);
     ResetInterface();
 
+    int table_len_input_value = 101;
+    bool table_gui_button_hovered_l = 0,
+         table_gui_button_hovered_r = 0;
+    TextField table_len_input(ivec2(0,0), -table_gui_rect_size/2 + table_gui_offset + ivec2(0, 56), 64, 4, "Количество точек", "0123456789", [&](TextField &ref, bool upd)
+    {
+        if (upd)
+        {
+            if (!ref.value.size())
+            {
+                table_len_input_value = 0;
+                ref.invalid = 1;
+                ref.invalid_text = "Выберите количество точек";
+                return;
+            }
+            Reflection::from_string(table_len_input_value, ref.value.c_str());
+            if (table_len_input_value < 2)
+            {
+                ref.invalid = 1;
+                ref.invalid_text = "Число должно быть больше единицы";
+                return;
+            }
+            ref.invalid = 0;
+            ref.invalid_text = "";
+        }
+    });
+    table_len_input.value = Reflection::to_string(table_len_input_value);
+
+    auto MakeTable = [&]
+    {
+        // Write me!
+        std::cout << "Make the table!\n";
+    };
+
     auto Tick = [&]
     {
         Draw::Accumulator::Return();
 
         bool button_pressed = mouse.left.pressed();
 
+        // Disable text fields on click
         if (button_pressed)
             TextField::Deactivate();
+
+        // Table creation GUI
+        if (show_table_gui)
+        {
+            table_len_input.Tick(button_pressed);
+
+            table_gui_button_hovered_l = abs(mouse.pos().x + table_gui_rect_size.x/4) <= table_gui_rect_size.x/4 && abs(mouse.pos().y - table_gui_rect_size.y/2 + table_gui_button_h/2) <= table_gui_button_h/2;
+            table_gui_button_hovered_r = abs(mouse.pos().x - table_gui_rect_size.x/4) <= table_gui_rect_size.x/4 && abs(mouse.pos().y - table_gui_rect_size.y/2 + table_gui_button_h/2) <= table_gui_button_h/2;
+
+            if (((button_pressed && table_gui_button_hovered_l) || Keys::enter.pressed()) && !table_len_input.invalid)
+            {
+                MakeTable();
+                show_table_gui = 0;
+            }
+            if ((button_pressed && table_gui_button_hovered_r) || Keys::escape.pressed())
+            {
+                show_table_gui = 0;
+            }
+
+            button_pressed = 0;
+        }
+
+        // Text fields
         for (auto &text_field : text_fields)
             text_field.Tick(button_pressed);
 
+        // Buttons
         Button::ResetTooltip();
         for (auto &button : buttons)
-            button.Tick(button_pressed);
+            button.Tick(button_pressed, show_table_gui);
 
+        // Interface reset if needed
         if (need_interface_reset)
         {
             need_interface_reset = 0;
             ResetInterface();
         }
 
+        // Swap min and max frequency if they are in the wrong order
+        if (!range_input_min->Active() && !range_input_max->Active())
+        {
+            if (freq_min > freq_max)
+            {
+                std::swap(freq_min, freq_max);
+                std::swap(range_input_min->value, range_input_max->value);
+            }
+        }
+
+        // Ignore clicks on interface rectangle
         if (mouse.pos().y + win.Size().y/2 < interface_rect_height)
             button_pressed = 0;
 
+        // Move plot
         if (button_pressed)
             plot.Grab();
 
+        // Plot tick
         plot.Tick(127); // This should be `2^n - 1` for plot to look pretty while moving.
 
         Draw::Accumulator::Overwrite();
@@ -1637,7 +1723,7 @@ int main(int, char **)
         Draw::Accumulator::Return();
 
         // Interface background
-        r.Quad(Draw::min, ivec2(win.Size().x, interface_rect_height)).color(fvec3(1)).alpha(interface_rect_alpha, interface_rect_alpha, interface_rect_alpha2, interface_rect_alpha2);
+        r.Quad(Draw::min, ivec2(win.Size().x, interface_rect_height)).color(fvec3(0.96)).alpha(interface_rect_alpha, interface_rect_alpha, interface_rect_alpha2, interface_rect_alpha2);
         r.Quad(Draw::min.add_y(interface_rect_height), ivec2(win.Size().x, 1)).color(fvec3(0));
 
         // Text fields
@@ -1665,6 +1751,38 @@ int main(int, char **)
                 r.Quad(ivec2(Draw::min.x, Draw::max.y - tooltip_box_height), ivec2(win.Size().x, 1)).color(tooltip_box_line_color);
                 r.Text(ivec2(0, Draw::max.y - tooltip_box_height/2 - tooltip_box_gap), Button::CurrentTooltip()).color(tooltip_box_text_color);
             }
+        }
+
+        // Table creation GUI
+        if (show_table_gui)
+        {
+            constexpr fvec3 rect_color(0.95), rect_color2(0.875), rect_frame_color(0), title_color(0), text_color(0),
+                            button_color(0), button_color_inact(0.5), button_color_back(1), button_color_frame(0.75);
+            constexpr int button_margin = 2;
+            Draw::Overlay();
+            r.Quad(ivec2(0), table_gui_rect_size+2).color(rect_frame_color).center();
+            r.Quad(ivec2(0), table_gui_rect_size).color(rect_color, rect_color, rect_color2, rect_color2).center();
+            r.Text(ivec2(0,-table_gui_rect_size.y/2), "Создание таблицы").color(title_color).align_v(-1);
+            table_len_input.Render();
+            r.Text(-table_gui_rect_size/2 + table_gui_offset, Str("Начальная частота:\t", freq_min, "\n"
+                                                                  "Конечная частота: \t", freq_max)).font(font_small).color(text_color).align(ivec2(-1));
+            r.Text(-table_gui_rect_size/2 + table_gui_offset + ivec2(0,108), Str("Шаг частоты: \t\t\t", table_len_input.invalid ? "?" : Str((freq_max - freq_min)/(table_len_input_value-1)) )).font(font_small).color(text_color).align(ivec2(-1));
+
+            if (table_gui_button_hovered_l)
+            {
+                r.Quad(ivec2(-table_gui_rect_size.x/4, table_gui_rect_size.y/2-table_gui_button_h/2), ivec2(table_gui_rect_size.x/2,table_gui_button_h)-button_margin*2 + 2).color(button_color_frame).center();
+                r.Quad(ivec2(-table_gui_rect_size.x/4, table_gui_rect_size.y/2-table_gui_button_h/2), ivec2(table_gui_rect_size.x/2,table_gui_button_h)-button_margin*2)
+                 .color(button_color_back,button_color_back,button_color_frame,button_color_frame).center();
+            }
+            if (table_gui_button_hovered_r)
+            {
+                r.Quad(ivec2(table_gui_rect_size.x/4, table_gui_rect_size.y/2-table_gui_button_h/2), ivec2(table_gui_rect_size.x/2,table_gui_button_h)-button_margin*2 + 2).color(button_color_frame).center();
+                r.Quad(ivec2(table_gui_rect_size.x/4, table_gui_rect_size.y/2-table_gui_button_h/2), ivec2(table_gui_rect_size.x/2,table_gui_button_h)-button_margin*2)
+                 .color(button_color_back,button_color_back,button_color_frame,button_color_frame).center();
+            }
+
+            r.Text((table_gui_rect_size/2).mul_x(-1) + ivec2(table_gui_rect_size.x/4, -table_gui_button_h/2), "Создать").color(table_len_input.invalid ? button_color_inact : button_color);
+            r.Text(table_gui_rect_size/2 - ivec2(table_gui_rect_size.x/4, table_gui_button_h/2), "Отмена").color(button_color);
         }
     };
 
