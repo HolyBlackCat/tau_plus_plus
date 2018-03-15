@@ -1758,8 +1758,9 @@ int main(int, char **)
         {
             constexpr fvec3 rect_color(0.95), rect_color2(0.875), rect_frame_color(0), title_color(0), text_color(0),
                             button_color(0), button_color_inact(0.5), button_color_back(1), button_color_frame(0.75);
-            constexpr int button_margin = 2;
+            constexpr int button_margin = 2, rect_frame_width = 8;
             Draw::Overlay();
+            r.Quad(ivec2(0), table_gui_rect_size+rect_frame_width*2).color(rect_frame_color).center().alpha(1/3.);
             r.Quad(ivec2(0), table_gui_rect_size+2).color(rect_frame_color).center();
             r.Quad(ivec2(0), table_gui_rect_size).color(rect_color, rect_color, rect_color2, rect_color2).center();
             r.Text(ivec2(0,-table_gui_rect_size.y/2), "Создание таблицы").color(title_color).align_v(-1);
