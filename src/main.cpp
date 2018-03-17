@@ -222,6 +222,40 @@ namespace Draw
         for (int x = 0; x < size.x; x++)
             r.Quad(min + ivec2(x,y)*tex_sz, ivec2(tex_sz)).tex(ivec2(type*64, 128));
     }
+
+    ivec2 RoughSize(const Graphics::CharMap &ch_map, std::string::const_iterator begin, std::string::const_iterator end)
+    {
+        ivec2 ret(0, ch_map.Height());
+        int cur_w = 0;
+        auto it = begin;
+        uint16_t prev_ch = u8invalidchar;
+        while (it != end)
+        {
+            if (u8isfirstbyte(it))
+            {
+                uint16_t ch = u8decode(it);
+
+                if (ch == '\n')
+                {
+                    ret.y += ch_map.LineSkip();
+                    if (cur_w > ret.x)
+                        ret.x = cur_w;
+                    cur_w = 0;
+                    prev_ch = u8invalidchar;
+                }
+
+                auto glyph = ch_map.Get(ch);
+                cur_w += glyph.advance;
+                if (prev_ch != u8invalidchar)
+                    cur_w += ch_map.Kerning(prev_ch, ch);
+
+                prev_ch = ch;
+            }
+            it++;
+        }
+        ret.x = Math::max(ret.x, cur_w);
+        return ret;
+    }
 }
 
 
@@ -1143,13 +1177,13 @@ class Plot
         }
 
         { // Curve names
-            constexpr int gap = 3;
-            int y = ViewportPos().y + gap;
+            constexpr int gap = 3, gap_y = 2;
+            int y = ViewportPos().y + 16;
             for (const auto &func : funcs)
             {
                 ivec2 pos(Draw::max.x - gap, Draw::min.y + y);
                 r.Text(pos, func.name).color(func.color).align(ivec2(1,-1)).preset(Draw::SupSub).preset(Draw::WithWhiteBackground());
-                y += gap + font_main.Height();
+                y += gap_y + font_main.Height();
             }
             r.Finish();
         }
@@ -1280,7 +1314,7 @@ class Button
 
 class TextField
 {
-    static constexpr int height = 24, text_offset_x = 6;
+    static constexpr int height = 24, text_offset_x = 6, fancy_margin_r = 128;
 
     static constexpr fvec3 title_color = fvec3(0),
                            invalid_color = fvec3(0.9,0.2,0);
@@ -1289,6 +1323,7 @@ class TextField
     using render_func_t = std::function<void(const TextField &)>;
 
     inline static unsigned int id_counter = 0, active_id = -1;
+    inline static uint32_t last_keypress_time = 0;
 
     unsigned int id = -2;
   public:
@@ -1301,8 +1336,10 @@ class TextField
     std::string allowed_chars = "";
     bool visible = 0;
 
-    bool with_cross_button = 0;
     bool cross_hovered = 0;
+
+    bool with_cross_button = 0;
+    bool fancy_input = 0;
 
     tick_func_t tick_func;
     render_func_t render_func;
@@ -1364,12 +1401,16 @@ class TextField
         if (id == active_id)
             Input::Text(&value, max_chars, allowed_chars);
 
+        if (Keys::any.repeated())
+            last_keypress_time = Events::Time();
+
         if (tick_func)
             tick_func(*this, value != saved_value);
     }
 
     void Render() const
     {
+        constexpr int fancy_shade_width = 32; // This appears on edjes if text is too long.
         constexpr fvec3 back_color(1);
 
         if (!visible)
@@ -1393,11 +1434,78 @@ class TextField
         r.Text(screen_pos.add_y(height), invalid_text).color(title_color).font(font_small).align(ivec2(-1,-1)).color(invalid_color);
 
         { // Text
-            auto text = r.Text(screen_pos + ivec2(text_offset_x, height/2), value).align_h(-1).font(font_small).color(fvec3(0));
-            if (invalid)
-                text.preset(Draw::ColorAfterPos(invalid_pos, invalid_color));
-            if (selected && tick_stabilizer.ticks % 60 < 30)
-                text.preset(Draw::WithCursor(Input::TextCursorPos(), fvec3(0)));
+            const int text_offset_right = text_offset_x + 20*with_cross_button;
+
+            int cursor_pos = 0;
+            if (id == active_id)
+                cursor_pos = Input::TextCursorPos();
+
+            ivec2 pos;
+            std::string str;
+            int cursor_pos_offset;
+            bool start_shade = 0, end_shade = 0;
+            if (!fancy_input)
+            {
+                pos = screen_pos + ivec2(text_offset_x, height/2);
+                str = value;
+                cursor_pos_offset = 0;
+            }
+            else
+            {
+                pos = screen_pos + ivec2(text_offset_x, height/2);
+                std::string::const_iterator cur_iter = value.begin() + cursor_pos, start_iter = cur_iter, end_iter = cur_iter;
+                int last_delta = 0, last_width = 0;
+
+                while (1)
+                {
+                    if (start_iter == value.begin())
+                    {
+                        last_delta = 0;
+                        break;
+                    }
+                    auto test_iter = std::prev(start_iter);
+                    int w = Draw::RoughSize(font_small, test_iter, cur_iter).x;
+                    int delta = (width - text_offset_x - fancy_margin_r) - w;
+                    if (delta < 0)
+                        break;
+                    last_delta = delta;
+                    last_width = w;
+                    start_iter = test_iter;
+                }
+                pos.x += last_delta;
+                last_width += last_delta;
+                while (1)
+                {
+                    if (end_iter == value.end())
+                        break;
+                    auto test_iter = std::next(end_iter);
+                    if ((width - last_width - text_offset_x - text_offset_right) < Draw::RoughSize(font_small, cur_iter, test_iter).x)
+                        break;
+                    end_iter = test_iter;
+                }
+
+                str = std::string(start_iter, end_iter);
+                cursor_pos_offset = start_iter - value.begin();
+
+                start_shade = start_iter != value.begin();
+                end_shade = end_iter != value.end();
+            }
+
+            {
+                auto text = r.Text(pos, str).align_h(-1).font(font_small).color(fvec3(0));
+                if (invalid)
+                    text.preset(Draw::ColorAfterPos(invalid_pos - cursor_pos_offset, invalid_color));
+                if (selected && (Events::Time() - last_keypress_time) % 60 < 30)
+                    text.preset(Draw::WithCursor(cursor_pos - cursor_pos_offset, fvec3(0)));
+            }
+
+            if (fancy_input)
+            {
+                if (start_shade)
+                    r.Quad(screen_pos+1, ivec2(fancy_shade_width, screen_size.y-2)).color(back_color).alpha(1,0,0,1);
+                if (end_shade)
+                    r.Quad(screen_pos + ivec2(screen_size.x-1-fancy_shade_width-text_offset_right+text_offset_x, 1), ivec2(fancy_shade_width, screen_size.y-2)).color(back_color).alpha(0,1,1,0);
+            }
         }
 
         // Cross button
@@ -1495,10 +1603,9 @@ int main(int, char **)
         switch (category)
         {
           case InterfaceObj::func_input:
-            text_fields.push_back(TextField(ivec2(-1,-1), ivec2(24+range_input_w*2 + input_gap_w*2, 80), 9000, 10, "Передаточная функция W(s)", "01234567890.,+-*/^()sj ", [&](TextField &ref, bool upd)
+            text_fields.push_back(TextField(ivec2(-1,-1), ivec2(24+range_input_w*2 + input_gap_w*2, 80), 9000, 1000, "Передаточная функция W(s)", "01234567890.,+-*/^()sj ", [&](TextField &ref, bool upd)
             {
                 ref.width = win.Size().x - ref.pos.x - 24;
-                ref.max_chars = ref.width / 8;
                 if (upd)
                 {
                     plot.ResetAccumulator();
@@ -1522,6 +1629,7 @@ int main(int, char **)
             func_input = &text_fields.back();
             func_input->value = default_expression;
             func_input->with_cross_button = 1;
+            func_input->fancy_input = 1;
             break;
           case InterfaceObj::range_input:
             {
