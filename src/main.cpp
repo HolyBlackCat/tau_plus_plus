@@ -957,6 +957,20 @@ class Plot
             for (auto *it : {&values_x, &values_y})
                 it->clear();
 
+            for (const auto &point : {Point(range_start, i), Point(range_start + range_len, i)})
+            {
+                if (point.valid)
+                {
+                    for (auto mem : {&ldvec2::x, &ldvec2::y})
+                    {
+                        if (point.pos.*mem < box_min.*mem)
+                            box_min.*mem = point.pos.*mem;
+                        if (point.pos.*mem > box_max.*mem)
+                            box_max.*mem = point.pos.*mem;
+                    }
+                }
+            }
+
             for (int j = 0; j <= bounding_box_segment_count; j++)
             {
                 auto point = Point(j / double(bounding_box_segment_count) * range_len + range_start, i);
