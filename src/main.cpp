@@ -90,21 +90,24 @@ namespace Draw
                 }
             });
         }
-        [[nodiscard]] auto WithWhiteBackground(Renderers::Poly2D::Text_t &ref) // A preset
+        [[nodiscard]] auto WithWhiteBackground(float alpha = 0.5) // Returns a preset
         {
-            constexpr int up = 1, down = 1, sides = 3;
-            ref.callback([&](const Renderers::Poly2D::Text_t::CallbackParams &params) mutable
+            return [&, alpha](Renderers::Poly2D::Text_t &ref)
             {
-                if (params.render_pass)
+                constexpr int up = 1, down = 1, sides = 3;
+                ref.callback([&, alpha](const Renderers::Poly2D::Text_t::CallbackParams &params) mutable
                 {
-                    auto *ch_map = params.obj.state().ch_map;
-                    bool first = params.index == 0,
-                         last = params.index == int(params.obj.state().str.size()) - 1;
-                    int kerning = params.obj.state().ch_map->Kerning(params.prev, params.ch);
-                    r.Quad(params.pos - ivec2(sides * first + kerning, ch_map->Ascent()+up),
-                           ivec2(params.glyph.advance + sides * (first + last) + kerning, ch_map->Height()+up+down)).color(fvec3(1)).alpha(0.5);
-                }
-            });
+                    if (params.render_pass)
+                    {
+                        auto *ch_map = params.obj.state().ch_map;
+                        bool first = params.index == 0,
+                             last = params.index == int(params.obj.state().str.size()) - 1;
+                        int kerning = params.obj.state().ch_map->Kerning(params.prev, params.ch);
+                        r.Quad(params.pos - ivec2(sides * first + kerning, ch_map->Ascent()+up),
+                               ivec2(params.glyph.advance + sides * (first + last) + kerning, ch_map->Height()+up+down)).color(fvec3(1)).alpha(alpha);
+                    }
+                });
+            };
         }
     }
 
@@ -766,6 +769,15 @@ class Plot
         std::string name;
     };
 
+    static ivec2 ViewportPos()
+    {
+        return ivec2(0, interface_rect_height);
+    }
+    static ivec2 ViewportSize()
+    {
+        return win.Size().sub_y(interface_rect_height);
+    }
+
   private:
     static constexpr float window_margin = 0.4;
     static constexpr int window_smallest_pix_margin = 8;
@@ -831,15 +843,6 @@ class Plot
         ret.pos.y = -ret.pos.y;
         ret.valid = std::isfinite(ret.pos.x) && std::isfinite(ret.pos.y);
         return ret;
-    }
-
-    static ivec2 ViewportPos()
-    {
-        return ivec2(0, interface_rect_height);
-    }
-    static ivec2 ViewportSize()
-    {
-        return win.Size().sub_y(interface_rect_height);
     }
 
     ldvec2 MinScale()
@@ -1131,7 +1134,7 @@ class Plot
             for (const auto &func : funcs)
             {
                 ivec2 pos(Draw::max.x - gap, Draw::min.y + y);
-                r.Text(pos, func.name).color(func.color).align(ivec2(1,-1)).preset(Draw::SupSub).preset(Draw::WithWhiteBackground);
+                r.Text(pos, func.name).color(func.color).align(ivec2(1,-1)).preset(Draw::SupSub).preset(Draw::WithWhiteBackground());
                 y += gap + font_main.Height();
             }
             r.Finish();
@@ -1439,10 +1442,10 @@ int main(int, char **)
     std::list<Button> buttons;
     std::list<TextField> text_fields;
 
-    enum class InterfaceObj {func_input, range_input, scale_xy, scale, mode, make_table};
+    enum class InterfaceObj {func_input, range_input, scale_xy, scale, mode, export_data};
 
     bool need_interface_reset = 0;
-    TextField *range_input_min = 0, *range_input_max = 0;
+    TextField *func_input = 0, *range_input_min = 0, *range_input_max = 0;
 
     static auto AddInterface = [&](InterfaceObj category)
     {
@@ -1478,6 +1481,7 @@ int main(int, char **)
                 }
             }));
             text_fields.back().value = default_expression;
+            func_input = &text_fields.back();
             break;
           case InterfaceObj::range_input:
             {
@@ -1574,11 +1578,61 @@ int main(int, char **)
                 }));
             }
             break;
-          case InterfaceObj::make_table:
-            // Phase log10 mode
-            buttons.push_back(Button(ivec2(-1,-1), ivec2(336,32), 13, 0, "Создать таблицу значений характеристик", [&]{
-                show_table_gui = 1;
+          case InterfaceObj::export_data:
+            // Save values to table
+            int x = 336;
+            buttons.push_back(Button(ivec2(-1,-1), ivec2(x,32), 13, 0, "Создать таблицу значений", [&]{
+                if (plot)
+                    show_table_gui = 1;
             }));
+            x += 48;
+            buttons.push_back(Button(ivec2(-1,-1), ivec2(x,32), 14, 0, "Сохранить изображения", [&]{
+                constexpr fvec3 text_color(0);
+                constexpr ivec2 text_offset(6,4);
+                constexpr float text_bg_alpha = 0.8;
+
+                if (!plot)
+                    return;
+                std::string file_name = "";
+                switch (cur_state)
+                {
+                    case State::main:            file_name = "plot_main.png";            break;
+                    case State::real_imag:       file_name = "plot_real_imag.png";       break;
+                    case State::amplitude:       file_name = "plot_amplitude.png";       break;
+                    case State::phase:           file_name = "plot_phase.png";           break;
+                    case State::amplitude_log10: file_name = "plot_amplitude_log10.png"; break;
+                    case State::phase_log10:     file_name = "plot_phase_log10.png";     break;
+                }
+
+                r.Text(Draw::min + plot.ViewportPos() + text_offset, "W(s) = " + func_input->value)
+                 .color(text_color).font(font_small).align(ivec2(-1)).preset(Draw::WithWhiteBackground(text_bg_alpha));
+                r.Finish();
+
+                Graphics::Image image(plot.ViewportSize());
+                glReadPixels(plot.ViewportPos().x, win.Size().y - plot.ViewportSize().y - plot.ViewportPos().y,
+                             plot.ViewportSize().x, plot.ViewportSize().y,
+                             GL_RGBA, GL_UNSIGNED_BYTE, (void *)image.Data());
+
+                Draw::Accumulator::Return();
+
+                for (int i = 0; i < image.Size().y/2; i++)
+                {
+                    std::swap_ranges((u8vec4 *)image.Data() + image.Size().x * i,
+                                     (u8vec4 *)image.Data() + image.Size().x * (i+1),
+                                     (u8vec4 *)image.Data() + image.Size().x * (image.Size().y-1-i));
+                }
+
+                try
+                {
+                    image.SaveToFile(file_name);
+                    ShowMessage("Изображение сохранено в файл\n" + file_name);
+                }
+                catch (...)
+                {
+                    ShowMessage("Не могу сохранить изображение в файл\n" + file_name);
+                }
+            }));
+
             break;
         }
     };
@@ -1616,7 +1670,7 @@ int main(int, char **)
 
         AddInterface(cur_state == State::main ? InterfaceObj::scale : InterfaceObj::scale_xy);
         AddInterface(InterfaceObj::mode);
-        AddInterface(InterfaceObj::make_table);
+        AddInterface(InterfaceObj::export_data);
     };
     AddInterface(InterfaceObj::func_input);
     AddInterface(InterfaceObj::range_input);
