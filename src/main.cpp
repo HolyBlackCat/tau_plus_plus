@@ -4,6 +4,7 @@
 //#define FORCE_FRAMEBUFFER // Use framebuffers, halt if not supported.
 
 #include <complex>
+#include <fstream>
 #include <iostream>
 #include <list>
 
@@ -1384,6 +1385,7 @@ int main(int, char **)
     constexpr fvec3 plot_color = fvec3(0.9,0,0.66);
     constexpr ivec2 table_gui_rect_size(400,300), table_gui_offset(64,80);
     constexpr int table_gui_button_h = 48;
+    constexpr int message_timer_start = 150, message_alpha_time = 60;
 
     Draw::Init();
 
@@ -1397,6 +1399,14 @@ int main(int, char **)
     long double freq_min = Plot::default_min, freq_max = Plot::default_max;
 
     bool show_table_gui = 0;
+
+    std::string message_text;
+    float message_timer = 0;
+    auto ShowMessage = [&](std::string text)
+    {
+        message_text = text;
+        message_timer = message_timer_start;
+    };
 
     Expression e(default_expression);
 
@@ -1641,8 +1651,39 @@ int main(int, char **)
 
     auto MakeTable = [&]
     {
-        // Write me!
-        std::cout << "Make the table!\n";
+        constexpr int column_w = 15, precision = 6;
+
+        std::string file_name = "table.txt";
+
+        std::ofstream out(file_name);
+        if (!out)
+        {
+            ShowMessage("Не могу записать таблицу в файл\n" + file_name);
+            return;
+        }
+
+        out << std::setw(column_w) << "w"
+            << std::setw(column_w) << "P(w)"
+            << std::setw(column_w) << "Q(w)"
+            << std::setw(column_w) << "A(w)"
+            << std::setw(column_w) << "phi(w)"
+            << std::setw(column_w) << "log10(w)"
+            << std::setw(column_w) << "20*log10(A)" << "\n\n";
+
+        for (int i = 0; i < table_len_input_value; i++)
+        {
+            long double freq = i / (long double)(table_len_input_value-1);
+            ldvec2 vec = func_main(freq);
+            long double ampl = vec.len(), phase = std::atan2(vec.y, vec.x);
+            out << ' ' << std::setw(column_w-1) << std::setprecision(precision) << freq
+                << ' ' << std::setw(column_w-1) << std::setprecision(precision) << vec.x
+                << ' ' << std::setw(column_w-1) << std::setprecision(precision) << vec.y
+                << ' ' << std::setw(column_w-1) << std::setprecision(precision) << ampl
+                << ' ' << std::setw(column_w-1) << std::setprecision(precision) << phase
+                << ' ' << std::setw(column_w-1) << std::setprecision(precision) << std::log10(freq)
+                << ' ' << std::setw(column_w-1) << std::setprecision(precision) << 20*std::log10(ampl) << '\n';
+        }
+        ShowMessage("Таблица сохранена в файл\n" + file_name);
     };
 
     auto Tick = [&]
@@ -1713,6 +1754,10 @@ int main(int, char **)
         // Plot tick
         plot.Tick(127); // This should be `2^n - 1` for plot to look pretty while moving.
 
+        // Message tick
+        if (message_timer > 0)
+            message_timer--;
+
         Draw::Accumulator::Overwrite();
     };
     auto Render = [&]
@@ -1764,6 +1809,7 @@ int main(int, char **)
             r.Quad(ivec2(0), table_gui_rect_size+2).color(rect_frame_color).center();
             r.Quad(ivec2(0), table_gui_rect_size).color(rect_color, rect_color, rect_color2, rect_color2).center();
             r.Text(ivec2(0,-table_gui_rect_size.y/2), "Создание таблицы").color(title_color).align_v(-1);
+            r.Quad(ivec2(0,-table_gui_rect_size.y/2+font_main.Height()), ivec2(table_gui_rect_size.x+2,1)).color(rect_frame_color).center();
             table_len_input.Render();
             r.Text(-table_gui_rect_size/2 + table_gui_offset, Str("Начальная частота:\t", freq_min, "\n"
                                                                   "Конечная частота: \t", freq_max)).font(font_small).color(text_color).align(ivec2(-1));
@@ -1784,6 +1830,19 @@ int main(int, char **)
 
             r.Text((table_gui_rect_size/2).mul_x(-1) + ivec2(table_gui_rect_size.x/4, -table_gui_button_h/2), "Создать").color(table_len_input.invalid ? button_color_inact : button_color);
             r.Text(table_gui_rect_size/2 - ivec2(table_gui_rect_size.x/4, table_gui_button_h/2), "Отмена").color(button_color);
+        }
+
+        // Message
+        if (message_timer > 0)
+        {
+            constexpr fvec3 frame_color(0), rect_color(0.92), text_color(0);
+            constexpr ivec2 rect_size(480,80);
+            constexpr int frame_w = 8;
+            float alpha = min(message_timer / float(message_alpha_time), 1);
+            r.Quad(ivec2(0), rect_size + 2*(frame_w)).color(frame_color).center().alpha(pow(alpha, 6) * 0.5);
+            r.Quad(ivec2(0), rect_size + 2).color(frame_color).center().alpha(pow(alpha, 3));
+            r.Quad(ivec2(0), rect_size).color(rect_color).center().alpha(alpha);
+            r.Text(ivec2(0), message_text).color(text_color).alpha(alpha);
         }
     };
 
