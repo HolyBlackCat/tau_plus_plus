@@ -1586,7 +1586,7 @@ int main(int, char **)
                     show_table_gui = 1;
             }));
             x += 48;
-            buttons.push_back(Button(ivec2(-1,-1), ivec2(x,32), 14, 0, "Сохранить изображения", [&]{
+            buttons.push_back(Button(ivec2(-1,-1), ivec2(x,32), 14, 0, "Сохранить изображение", [&]{
                 constexpr fvec3 text_color(0);
                 constexpr ivec2 text_offset(6,4);
                 constexpr float text_bg_alpha = 0.8;
