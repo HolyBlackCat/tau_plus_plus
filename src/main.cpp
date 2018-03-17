@@ -1301,6 +1301,9 @@ class TextField
     std::string allowed_chars = "";
     bool visible = 0;
 
+    bool with_cross_button = 0;
+    bool cross_hovered = 0;
+
     tick_func_t tick_func;
     render_func_t render_func;
 
@@ -1346,13 +1349,18 @@ class TextField
         ivec2 screen_pos = ScreenPos(),
               screen_size = ScreenSize();
 
+        std::string saved_value = value;
+
+        cross_hovered = with_cross_button && (abs(mouse.pos() - screen_pos - ivec2(screen_size.x - 12, screen_size.y/2)) <= 8).all();
+
         if ((mouse.pos() >= screen_pos).all() && (mouse.pos() < screen_pos + screen_size).all() && button_pressed)
         {
             button_pressed = 0;
             Activate();
+            if (cross_hovered)
+                value = "";
         }
 
-        std::string saved_value = value;
         if (id == active_id)
             Input::Text(&value, max_chars, allowed_chars);
 
@@ -1362,6 +1370,8 @@ class TextField
 
     void Render() const
     {
+        constexpr fvec3 back_color(1);
+
         if (!visible)
             return;
 
@@ -1374,7 +1384,7 @@ class TextField
         if (selected)
             r.Quad(screen_pos-1, screen_size+2).color(fvec3(0)).alpha(0.5);
         r.Quad(screen_pos, screen_size).color(fvec3(0));
-        r.Quad(screen_pos+1, screen_size-2).color(fvec3(1));
+        r.Quad(screen_pos+1, screen_size-2).color(back_color);
 
         // Title
         r.Text(screen_pos, title).color(title_color).font(font_small).align(ivec2(-1,1));
@@ -1390,6 +1400,16 @@ class TextField
                 text.preset(Draw::WithCursor(Input::TextCursorPos(), fvec3(0)));
         }
 
+        // Cross button
+        if (with_cross_button)
+        {
+            ivec2 pos = screen_pos + ivec2(screen_size.x - 12, screen_size.y/2);
+            r.Quad(pos, ivec2(16)).center().color(back_color);
+            auto q = r.Quad(pos, ivec2(16)).center().tex(ivec2(64,0));
+            if (cross_hovered)
+                q.color(invalid_color).mix(0);
+        }
+
         if (render_func)
             render_func(*this);
     }
@@ -1398,7 +1418,7 @@ class TextField
 
 int main(int, char **)
 {
-    const std::string default_expression = "0";
+    const std::string default_expression = "";
     constexpr fvec3 plot_color = fvec3(0.9,0,0.66);
     constexpr ivec2 table_gui_rect_size(400,300), table_gui_offset(64,80);
     constexpr int table_gui_button_h = 48;
@@ -1425,7 +1445,12 @@ int main(int, char **)
         message_timer = message_timer_start;
     };
 
-    Expression e(default_expression);
+    Expression e;
+    try
+    {
+        e = Expression(default_expression);
+    }
+    catch (...) {}
 
     auto func_main  = [&e](long double t){return e.EvalVec({0,t});};
     auto func_real  = [&e](long double t){return ldvec2(t,e.EvalVec({0,t}).x);};
@@ -1494,8 +1519,9 @@ int main(int, char **)
                     need_interface_reset = 1;
                 }
             }));
-            text_fields.back().value = default_expression;
             func_input = &text_fields.back();
+            func_input->value = default_expression;
+            func_input->with_cross_button = 1;
             break;
           case InterfaceObj::range_input:
             {
@@ -1595,7 +1621,7 @@ int main(int, char **)
           case InterfaceObj::export_data:
             // Save values to table
             int x = 336;
-            buttons.push_back(Button(ivec2(-1,-1), ivec2(x,32), 13, 0, "Создать таблицу значений", [&]{
+            buttons.push_back(Button(ivec2(-1,-1), ivec2(x,32), 13, 0, "Сохранить таблицу значений", [&]{
                 if (plot)
                     show_table_gui = 1;
             }));
