@@ -501,6 +501,10 @@ namespace Utils
             {
                 Create(fname, mode);
             }
+            MemoryFile(const uint8_t *data_ptr, std::size_t data_size, std::string data_name = "Memory")
+            {
+                Create(data_ptr, data_size, data_name);
+            }
             void Create(std::string fname, Compression mode = not_compressed)
             {
                 impl::FileHandle input({fname.c_str(), "rb"});
@@ -539,6 +543,13 @@ namespace Utils
                     }
                     break;
                 }
+            }
+            void Create(const uint8_t *data_ptr, std::size_t data_size, std::string data_name = "Memory")
+            {
+                auto buf = std::make_unique<uint8_t[]>(data_size+1); // +1 to make space for '\0'
+                std::copy(data_ptr, data_ptr + data_size, buf.get());
+                buf[data_size] = '\0';
+                data = std::make_shared<Object>(Object{data_name, data_size, std::move(buf)});
             }
             void Destroy()
             {

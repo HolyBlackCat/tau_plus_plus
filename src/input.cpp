@@ -221,4 +221,8 @@ namespace Input
     {
         return text_cursor_byte_pos;
     }
+    void SetTextCursorPos(int pos)
+    {
+        text_cursor_pos = pos;
+    }
 }

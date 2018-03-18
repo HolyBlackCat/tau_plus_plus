@@ -96,6 +96,7 @@ namespace Input
 
     int TextCursorPos(); // The cursor should be drawn before or under the characther with returned index.
     int TextCursorBytePos();
+    void SetTextCursorPos(int pos);
 
     namespace Keys
     {

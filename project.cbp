@@ -19,14 +19,15 @@
 				</Compiler>
 			</Target>
 			<Target title="Release">
-				<Option output="bin/tau++" prefix_auto="1" extension_auto="1" />
-				<Option working_dir="bin/" />
+				<Option output="release/tau++ Частотные характеристики" prefix_auto="1" extension_auto="1" />
+				<Option working_dir="release/" />
 				<Option object_output="obj/" />
 				<Option type="0" />
 				<Option compiler="gcc" />
 				<Compiler>
 					<Add option="-O3" />
 					<Add option="-DNDEBUG" />
+					<Add option="-DPACKED_ASSETS" />
 				</Compiler>
 				<Linker>
 					<Add option="-s" />
@@ -90,6 +91,18 @@
 			<Add library="z" />
 			<Add directory="libs/win32" />
 		</Linker>
+		<Unit filename="bin/assets/Xolonium-Regular.ttf">
+			<Option compile="1" />
+			<Option link="1" />
+			<Option compiler="gcc" use="1" buildCommand="objcopy -I binary -O pei-i386 -B i386 bin/assets/Xolonium-Regular.ttf $object" />
+			<Option target="Release" />
+		</Unit>
+		<Unit filename="bin/assets/texture.png">
+			<Option compile="1" />
+			<Option link="1" />
+			<Option compiler="gcc" use="1" buildCommand="objcopy -I binary -O pei-i386 -B i386 bin/assets/texture.png $object" />
+			<Option target="Release" />
+		</Unit>
 		<Unit filename="libs/glfl.cpp" />
 		<Unit filename="libs/icon.rc">
 			<Option compilerVar="WINDRES" />

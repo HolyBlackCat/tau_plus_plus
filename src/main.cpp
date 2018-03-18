@@ -1,7 +1,16 @@
 #include "everything.h"
 
+#define VERSION "1.1"
+
 //#define FORCE_ACCUMULATOR // Use accumulator even if framebuffers are supported.
 //#define FORCE_FRAMEBUFFER // Use framebuffers, halt if not supported.
+
+#ifdef PACKED_ASSETS
+extern unsigned char binary_bin_assets_texture_png_start;
+extern unsigned char binary_bin_assets_texture_png_end;
+extern unsigned char binary_bin_assets_Xolonium_Regular_ttf_start;
+extern unsigned char binary_bin_assets_Xolonium_Regular_ttf_end;
+#endif
 
 #include <complex>
 #include <fstream>
@@ -10,7 +19,7 @@
 
 Events::AutoErrorHandlers error_handlers;
 
-Window win("TAU++", ivec2(800,600), Window::Settings{}.GlVersion(2,1).GlProfile(Window::any_profile).Resizable().MinSize(ivec2(800,600)));
+Window win("[TAU++] Частотные характеристики v" VERSION, ivec2(800,600), Window::Settings{}.GlVersion(2,1).GlProfile(Window::any_profile).Resizable().MinSize(ivec2(800,600)));
 Timing::TickStabilizer tick_stabilizer(60);
 
 Renderers::Poly2D r;
@@ -164,10 +173,18 @@ namespace Draw
         Graphics::Blending::Enable();
         Graphics::Blending::FuncNormalPre();
 
+        #ifndef PACKED_ASSETS
         Graphics::Image texture_image_main("assets/texture.png");
-
         font_object_main.Create("assets/Xolonium-Regular.ttf", 20);
         font_object_small.Create("assets/Xolonium-Regular.ttf", 11);
+        #else
+        Utils::MemoryFile font(&binary_bin_assets_Xolonium_Regular_ttf_start, &binary_bin_assets_Xolonium_Regular_ttf_end-&binary_bin_assets_Xolonium_Regular_ttf_start);
+        font_object_main.Create(font, 20);
+        font_object_small.Create(font, 11);
+
+        Graphics::Image texture_image_main(Utils::MemoryFile(&binary_bin_assets_texture_png_start, &binary_bin_assets_texture_png_end-&binary_bin_assets_texture_png_start));
+        #endif
+
 
         Graphics::Font::MakeAtlas(texture_image_main, ivec2(0,1024-128), ivec2(1024,128),
         {
@@ -264,6 +281,53 @@ class Expression
   public:
     using complex_t = std::complex<long double>;
 
+    struct ap_complex_t
+    {
+        long double amp, phase;
+        ap_complex_t(long double real = 0, long double imag = 0) : amp(std::hypot(real,imag)), phase(std::atan2(imag, real)) {}
+        ap_complex_t(const ldvec2 &vec) : ap_complex_t(vec.x, vec.y) {}
+
+        using cref = const ap_complex_t;
+
+        static ap_complex_t make(long double amp, long double phase = 0)
+        {
+            ap_complex_t ret;
+            ret.amp = amp;
+            ret.phase = phase;
+            return ret;
+        }
+
+        ldvec2 to_vec2() const
+        {
+            return ldvec2(std::cos(phase)*amp, std::sin(phase)*amp);
+        }
+
+        static ap_complex_t op_neg(cref a) // This normally shouldn't be used.
+        {
+            return make(a.amp, ld_pi - a.phase);
+        }
+        static ap_complex_t op_add(cref a, cref b)
+        {
+            return op_mul(ap_complex_t(make(a.amp, a.phase - b.phase).to_vec2().add_x(b.amp)), make(1, b.phase));
+        }
+        static ap_complex_t op_sub(cref a, cref b) // This normally shouldn't be used.
+        {
+            return op_add(a, op_neg(b));
+        }
+        static ap_complex_t op_mul(cref a, cref b)
+        {
+            return make(a.amp * b.amp, a.phase + b.phase);
+        }
+        static ap_complex_t op_div(cref a, cref b)
+        {
+            return make(a.amp / b.amp, a.phase - b.phase);
+        }
+        static ap_complex_t op_pow(cref a, cref b) // `b` should have `phase = 0`.
+        {
+            return make(std::pow(a.amp, b.amp), a.phase * b.amp);
+        }
+    };
+
     struct Exception : std::exception
     {
         std::string message;
@@ -342,25 +406,31 @@ class Expression
     {
         return op == Token::pow || op == Token::fake_mul;
     }
-    static complex_t (*OperatorFunc(Token::Operator op))(complex_t, complex_t)
+
+    struct OpFunc
+    {
+        complex_t (*plain)(complex_t, complex_t);
+        ap_complex_t (*ap)(ap_complex_t, ap_complex_t);
+    };
+    static OpFunc OperatorFunc(Token::Operator op)
     {
         switch (op)
         {
           case Token::plus:
-            return [](complex_t a, complex_t b){return a + b;};
+            return {[](complex_t a, complex_t b){return a + b;}, ap_complex_t::op_add};
           case Token::minus:
-            return [](complex_t a, complex_t b){return a - b;};
+            return {[](complex_t a, complex_t b){return a - b;}, ap_complex_t::op_sub};
           case Token::mul:
           case Token::fake_mul:
-            return [](complex_t a, complex_t b){return a * b;};
+            return {[](complex_t a, complex_t b){return a * b;}, ap_complex_t::op_mul};
           case Token::div:
-            return [](complex_t a, complex_t b){return a / b;};
+            return {[](complex_t a, complex_t b){return a / b;}, ap_complex_t::op_div};
           case Token::pow:
-            return [](complex_t a, complex_t b){return std::pow(a, b);};
+            return {[](complex_t a, complex_t b){return std::pow(a, b);}, ap_complex_t::op_pow};
           case Token::left_paren:
-            return 0;
+            return {};
         }
-        return 0;
+        return {};
     }
 
     static bool Tokenize(std::string_view str, char var_name, std::list<Token> *list, int *error_pos, std::string *error_msg)
@@ -466,7 +536,7 @@ class Expression
                         return 0;
                     }
 
-                    long double value;
+                    long double value = 0;
                     if (auto end = Reflection::from_string(value, num.c_str()); end == num.c_str() + num.size())
                     {
                         token.type = Token::num;
@@ -611,11 +681,17 @@ class Expression
     {
         enum Type {num, var, op};
 
+        int position;
         Type type;
 
         union
         {
-            complex_t (*op_func)(complex_t, complex_t);
+            struct
+            {
+                Token::Operator type;
+                OpFunc func;
+            }
+            o;
             struct
             {
                 long double real, imag;
@@ -631,7 +707,12 @@ class Expression
     {
         // Shunting-yard algorithm
 
-        std::vector<Token::Operator> op_stack;
+        struct OperatorStackElement
+        {
+            Token::Operator op;
+            int pos;
+        };
+        std::vector<OperatorStackElement> op_stack;
 
         for (const auto &token : tokens)
         {
@@ -640,6 +721,7 @@ class Expression
               case Token::num:
                 {
                     Element el;
+                    el.position = token.starts_at;
                     el.type = Element::num;
                     el.num_value.real = token.num_value;
                     el.num_value.imag = 0;
@@ -649,6 +731,7 @@ class Expression
               case Token::imag_unit:
                 {
                     Element el;
+                    el.position = token.starts_at;
                     el.type = Element::num;
                     el.num_value.real = 0;
                     el.num_value.imag = 1;
@@ -658,6 +741,7 @@ class Expression
               case Token::var:
                 {
                     Element el;
+                    el.position = token.starts_at;
                     el.type = Element::var;
                     elems->push_back(el);
                 }
@@ -667,17 +751,19 @@ class Expression
                     int this_prec = Precedence(token.op_type);
                     Element el;
                     el.type = Element::op;
-                    while (op_stack.size() > 0 && op_stack.back() != Token::left_paren && (this_prec < Precedence(op_stack.back()) || (this_prec == Precedence(op_stack.back()) && !IsRightAssociative(token.op_type))))
+                    while (op_stack.size() > 0 && op_stack.back().op != Token::left_paren && (this_prec < Precedence(op_stack.back().op) || (this_prec == Precedence(op_stack.back().op) && !IsRightAssociative(token.op_type))))
                     {
-                        el.op_func = OperatorFunc(op_stack.back());
+                        el.o.type = op_stack.back().op;
+                        el.o.func = OperatorFunc(op_stack.back().op);
+                        el.position = op_stack.back().pos;
                         elems->push_back(el);
                         op_stack.pop_back();
                     }
-                    op_stack.push_back(token.op_type);
+                    op_stack.push_back({token.op_type, token.starts_at});
                 }
                 break;
               case Token::lparen:
-                op_stack.push_back(Token::left_paren);
+                op_stack.push_back({Token::left_paren, token.starts_at});
                 break;
               case Token::rparen:
                 while (1)
@@ -685,12 +771,14 @@ class Expression
                     if (op_stack.empty())
                         return 0;
 
-                    bool lparen_found = (op_stack.back() == Token::left_paren);
+                    bool lparen_found = (op_stack.back().op == Token::left_paren);
                     if (!lparen_found)
                     {
                         Element el;
                         el.type = Element::op;
-                        el.op_func = OperatorFunc(op_stack.back());
+                        el.position = op_stack.back().pos;
+                        el.o.type = op_stack.back().op;
+                        el.o.func = OperatorFunc(op_stack.back().op);
                         elems->push_back(el);
                     }
                     op_stack.pop_back();
@@ -704,16 +792,51 @@ class Expression
 
         while (op_stack.size() > 0)
         {
-            if (op_stack.back() == Token::left_paren)
+            if (op_stack.back().op == Token::left_paren)
                 return 0;
             Element el;
             el.type = Element::op;
-            el.op_func = OperatorFunc(op_stack.back());
+            el.position = op_stack.back().pos;
+            el.o.type = op_stack.back().op;
+            el.o.func = OperatorFunc(op_stack.back().op);
             elems->push_back(el);
             op_stack.pop_back();
         }
 
         return 1;
+    }
+
+    static void ValidateExpression(const std::vector<Element> &elems)
+    {
+        std::vector<bool> stack; // Stores 1 for real values and 0 for complex ones.
+
+        for (const auto &elem : elems)
+        {
+            switch (elem.type)
+            {
+              case Element::num:
+                stack.push_back(elem.num_value.imag == 0);
+                break;
+              case Element::var:
+                stack.push_back(0);
+                break;
+              case Element::op:
+                {
+                    if (stack.size() < 2)
+                        throw Exception("Ошибка при вычислении.", 0);
+                    if (elem.o.type == Token::pow && !stack.back())
+                        throw Exception("Показатель степени не может быть комплексным.", elem.position);
+                    bool is_real = stack.back() && stack[stack.size() - 2];
+                    stack.pop_back();
+                    stack.pop_back(); // Sic! We pop twice.
+                    stack.push_back(is_real);
+                }
+                break;
+            }
+        }
+
+        if (stack.size() != 1)
+            throw Exception("Ошибка при вычислении.", 0);
     }
 
   public:
@@ -729,6 +852,7 @@ class Expression
         {
             if (!ParseExpression(tokens, &elements))
                 throw Exception("Недопустимое выражение.", 0);
+            ValidateExpression(elements);
         }
         else
         {
@@ -758,7 +882,7 @@ class Expression
                 {
                     if (stack.size() < 2)
                         throw std::runtime_error("Ошибка при вычислении.");
-                    complex_t result = elem.op_func(stack[stack.size()-2], stack.back());
+                    complex_t result = elem.o.func.plain(stack[stack.size()-2], stack.back());
                     stack.pop_back();
                     stack.pop_back(); // Sic! We pop twice.
                     stack.push_back(result);
@@ -776,6 +900,37 @@ class Expression
     {
         auto val = Eval(variable);
         return {val.real(), val.imag()};
+    }
+    ap_complex_t EvalAP(ap_complex_t variable) const
+    {
+        std::vector<ap_complex_t> stack;
+        for (const auto &elem : elements)
+        {
+            switch (elem.type)
+            {
+              case Element::num:
+                stack.push_back({elem.num_value.real, elem.num_value.imag});
+                break;
+              case Element::var:
+                stack.push_back(variable);
+                break;
+              case Element::op:
+                {
+                    if (stack.size() < 2)
+                        throw std::runtime_error("Ошибка при вычислении.");
+                    ap_complex_t result = elem.o.func.ap(stack[stack.size()-2], stack.back());
+                    stack.pop_back();
+                    stack.pop_back(); // Sic! We pop twice.
+                    stack.push_back(result);
+                }
+                break;
+            }
+        }
+
+        if (stack.size() != 1)
+            throw std::runtime_error("Ошибка при вычислении.");
+
+        return stack.front();
     }
 };
 
@@ -830,9 +985,6 @@ class Plot
                            grid_large_line_color = 0.55,
                            grid_mid_line_color   = 0.8,
                            grid_small_line_color = 0.85;
-
-    static constexpr fvec3 secondary_color = fvec3(0.6);
-
 
     using distr_t = std::uniform_real_distribution<long double>;
 
@@ -890,27 +1042,15 @@ class Plot
 
     void AddPoint(int type, long double value)
     {
-        auto Lambda = [&](bool custom, ldvec2 off)
+        for (int i = 0; i < int(funcs.size()); i++)
         {
-            for (int i = 0; i < int(funcs.size()); i++)
-            {
-                auto point = Point(value, i);
-                if (!point.valid)
-                    continue;
-                ldvec2 pos = (point.pos + offset) * scale;
-                if (custom)
-                    pos += off;
-                if ((abs(pos) > win.Size()/2).any())
-                    continue;
-                Draw::Dot(custom ? 4 : type, pos, custom ? secondary_color : funcs[i].color);
-            }
-        };
-
-        Lambda(0, {});
-        if (flags & vertical_pi)
-        {
-            Lambda(1, ldvec2(0, scale.y*2));
-            Lambda(1, ldvec2(0,-scale.y*2));
+            auto point = Point(value, i);
+            if (!point.valid)
+                continue;
+            ldvec2 pos = (point.pos + offset) * scale;
+            if ((abs(pos) > win.Size()/2).any())
+                continue;
+            Draw::Dot(type, pos, funcs[i].color);
         }
     }
 
@@ -1553,6 +1693,10 @@ int main(int, char **)
         message_timer = message_timer_start;
     };
 
+    bool show_about = 0;
+    float about_screen_alpha = 0;
+    constexpr float about_screen_alpha_step = 0.1;
+
     Expression e;
     try
     {
@@ -1563,8 +1707,8 @@ int main(int, char **)
     auto func_main  = [&e](long double t){return e.EvalVec({0,t});};
     auto func_real  = [&e](long double t){return ldvec2(t,e.EvalVec({0,t}).x);};
     auto func_imag  = [&e](long double t){return ldvec2(t,e.EvalVec({0,t}).y);};
-    auto func_ampl  = [&e](long double t){return ldvec2(t,e.EvalVec({0,t}).len());};
-    auto func_phase = [&e](long double t){auto v = e.EvalVec({0,t}); return ldvec2(t,std::atan2(v.y,v.x));};
+    auto func_ampl  = [&e](long double t){return ldvec2(t,e.EvalAP({0,t}).amp);};
+    auto func_phase = [&e](long double t){return ldvec2(t,e.EvalAP({0,t}).phase);};
 
     Plot plot;
 
@@ -1589,7 +1733,7 @@ int main(int, char **)
     std::list<Button> buttons;
     std::list<TextField> text_fields;
 
-    enum class InterfaceObj {func_input, range_input, scale_xy, scale, mode, export_data};
+    enum class InterfaceObj {func_input, range_input, scale_xy, scale, mode, export_data, about};
 
     bool need_interface_reset = 0;
     TextField *func_input = 0, *range_input_min = 0, *range_input_max = 0;
@@ -1633,31 +1777,46 @@ int main(int, char **)
             break;
           case InterfaceObj::range_input:
             {
-                auto Lambda = [&](TextField &ref, long double &param)
+                auto Lambda = [&, last_valid = std::string(), last_valid_cur = int()](TextField &ref, long double &param, bool upd) mutable
                 {
-                    if (auto it = ref.value.begin(); it != ref.value.end())
-                        ref.value.erase(std::remove(++it, ref.value.end(), '-'), ref.value.end());
-                    if (auto it = std::find(ref.value.begin(), ref.value.end(), '.'); it != ref.value.end())
-                        ref.value.erase(std::remove(++it, ref.value.end(), '.'), ref.value.end());
-                    std::string value_copy = ref.value;
-                    std::replace(value_copy.begin(), value_copy.end(), ',', '.');
-                    if (value_copy.empty())
-                        value_copy = "0";
-                    Reflection::from_string(param, value_copy.c_str());
-                    need_interface_reset = 1;
-                };
-                range_input_min = &text_fields.emplace_back(TextField(ivec2(-1,-1), ivec2(24, 80), 64, 6, "Мин. частота", "0123456789.-", [&, Lambda](TextField &ref, bool upd)
-                {
-                    if (upd)
-                        Lambda(ref, freq_min);
-                }));
-                text_fields.back().value = Reflection::to_string(Plot::default_min);
-                range_input_max = &text_fields.emplace_back(TextField(ivec2(-1,-1), ivec2(24+range_input_w+input_gap_w, 80), 64, 6, "Макс. частота", "0123456789.-", [&, Lambda](TextField &ref, bool upd)
-                {
+                    if (!upd && ref.Active())
+                    {
+                        last_valid = ref.value;
+                        last_valid_cur = Input::TextCursorPos();
+                        return;
+                    }
                     if (upd)
                     {
-                        Lambda(ref, freq_max);
+                        std::string value_copy = ref.value;
+                        std::replace(value_copy.begin(), value_copy.end(), ',', '.');
+                        bool ok = 1;
+                        if (auto pos = value_copy.find_last_of('-'); pos != value_copy.npos && pos != 0)
+                            ok = 0;
+                        if (std::count(value_copy.begin(), value_copy.end(), '.') > 1)
+                            ok = 0;
+                        if (!ok)
+                        {
+                            ref.value = last_valid;
+                            Input::SetTextCursorPos(last_valid_cur);
+                        }
+                        else
+                        {
+                            last_valid = ref.value;
+                            last_valid_cur = Input::TextCursorPos();
+                        }
+                        param = 0;
+                        Reflection::from_string(param, value_copy.c_str());
+                        need_interface_reset = 1;
                     }
+                };
+                range_input_min = &text_fields.emplace_back(TextField(ivec2(-1,-1), ivec2(24, 80), 64, 6, "Мин. частота", "0123456789.,-", [&, Lambda](TextField &ref, bool upd) mutable
+                {
+                    Lambda(ref, freq_min, upd);
+                }));
+                text_fields.back().value = Reflection::to_string(Plot::default_min);
+                range_input_max = &text_fields.emplace_back(TextField(ivec2(-1,-1), ivec2(24+range_input_w+input_gap_w, 80), 64, 6, "Макс. частота", "0123456789.,-", [&, Lambda](TextField &ref, bool upd) mutable
+                {
+                    Lambda(ref, freq_max, upd);
                 }));
                 text_fields.back().value = Reflection::to_string(Plot::default_max);
             }
@@ -1727,60 +1886,66 @@ int main(int, char **)
             }
             break;
           case InterfaceObj::export_data:
-            // Save values to table
-            int x = 336;
-            buttons.push_back(Button(ivec2(-1,-1), ivec2(x,32), 13, 0, "Сохранить таблицу значений", [&]{
-                if (plot)
-                    show_table_gui = 1;
+            {
+                // Save values to table
+                int x = 336;
+                buttons.push_back(Button(ivec2(-1,-1), ivec2(x,32), 13, 0, "Сохранить таблицу значений", [&]{
+                    if (plot)
+                        show_table_gui = 1;
+                }));
+                x += 48;
+                buttons.push_back(Button(ivec2(-1,-1), ivec2(x,32), 14, 0, "Сохранить изображение", [&]{
+                    constexpr fvec3 text_color(0);
+                    constexpr ivec2 text_offset(6,4);
+                    constexpr float text_bg_alpha = 0.8;
+
+                    if (!plot)
+                        return;
+                    std::string file_name = "";
+                    switch (cur_state)
+                    {
+                        case State::main:            file_name = "plot_main.png";            break;
+                        case State::real_imag:       file_name = "plot_real_imag.png";       break;
+                        case State::amplitude:       file_name = "plot_amplitude.png";       break;
+                        case State::phase:           file_name = "plot_phase.png";           break;
+                        case State::amplitude_log10: file_name = "plot_amplitude_log10.png"; break;
+                        case State::phase_log10:     file_name = "plot_phase_log10.png";     break;
+                    }
+
+                    r.Text(Draw::min + plot.ViewportPos() + text_offset, "W(s) = " + func_input->value)
+                     .color(text_color).font(font_small).align(ivec2(-1)).preset(Draw::WithWhiteBackground(text_bg_alpha));
+                    r.Finish();
+
+                    Graphics::Image image(plot.ViewportSize());
+                    glReadPixels(plot.ViewportPos().x, win.Size().y - plot.ViewportSize().y - plot.ViewportPos().y,
+                                 plot.ViewportSize().x, plot.ViewportSize().y,
+                                 GL_RGBA, GL_UNSIGNED_BYTE, (void *)image.Data());
+
+                    Draw::Accumulator::Return();
+
+                    for (int i = 0; i < image.Size().y/2; i++)
+                    {
+                        std::swap_ranges((u8vec4 *)image.Data() + image.Size().x * i,
+                                         (u8vec4 *)image.Data() + image.Size().x * (i+1),
+                                         (u8vec4 *)image.Data() + image.Size().x * (image.Size().y-1-i));
+                    }
+
+                    try
+                    {
+                        image.SaveToFile(file_name);
+                        ShowMessage("Изображение сохранено в файл\n" + file_name);
+                    }
+                    catch (...)
+                    {
+                        ShowMessage("Не могу сохранить изображение в файл\n" + file_name);
+                    }
+                }));
+            }
+            break;
+          case InterfaceObj::about:
+            buttons.push_back(Button(ivec2(-1,-1), ivec2(448,32), 15, 0, "О программе", [&]{
+                show_about = 1;
             }));
-            x += 48;
-            buttons.push_back(Button(ivec2(-1,-1), ivec2(x,32), 14, 0, "Сохранить изображение", [&]{
-                constexpr fvec3 text_color(0);
-                constexpr ivec2 text_offset(6,4);
-                constexpr float text_bg_alpha = 0.8;
-
-                if (!plot)
-                    return;
-                std::string file_name = "";
-                switch (cur_state)
-                {
-                    case State::main:            file_name = "plot_main.png";            break;
-                    case State::real_imag:       file_name = "plot_real_imag.png";       break;
-                    case State::amplitude:       file_name = "plot_amplitude.png";       break;
-                    case State::phase:           file_name = "plot_phase.png";           break;
-                    case State::amplitude_log10: file_name = "plot_amplitude_log10.png"; break;
-                    case State::phase_log10:     file_name = "plot_phase_log10.png";     break;
-                }
-
-                r.Text(Draw::min + plot.ViewportPos() + text_offset, "W(s) = " + func_input->value)
-                 .color(text_color).font(font_small).align(ivec2(-1)).preset(Draw::WithWhiteBackground(text_bg_alpha));
-                r.Finish();
-
-                Graphics::Image image(plot.ViewportSize());
-                glReadPixels(plot.ViewportPos().x, win.Size().y - plot.ViewportSize().y - plot.ViewportPos().y,
-                             plot.ViewportSize().x, plot.ViewportSize().y,
-                             GL_RGBA, GL_UNSIGNED_BYTE, (void *)image.Data());
-
-                Draw::Accumulator::Return();
-
-                for (int i = 0; i < image.Size().y/2; i++)
-                {
-                    std::swap_ranges((u8vec4 *)image.Data() + image.Size().x * i,
-                                     (u8vec4 *)image.Data() + image.Size().x * (i+1),
-                                     (u8vec4 *)image.Data() + image.Size().x * (image.Size().y-1-i));
-                }
-
-                try
-                {
-                    image.SaveToFile(file_name);
-                    ShowMessage("Изображение сохранено в файл\n" + file_name);
-                }
-                catch (...)
-                {
-                    ShowMessage("Не могу сохранить изображение в файл\n" + file_name);
-                }
-            }));
-
             break;
         }
     };
@@ -1819,6 +1984,7 @@ int main(int, char **)
         AddInterface(cur_state == State::main ? InterfaceObj::scale : InterfaceObj::scale_xy);
         AddInterface(InterfaceObj::mode);
         AddInterface(InterfaceObj::export_data);
+        AddInterface(InterfaceObj::about);
     };
     AddInterface(InterfaceObj::func_input);
     AddInterface(InterfaceObj::range_input);
@@ -1888,6 +2054,22 @@ int main(int, char **)
         ShowMessage("Таблица сохранена в файл\n" + file_name);
     };
 
+    auto RenderAbout = [&]
+    {
+        constexpr ivec2 box_size(416,154);
+        constexpr fvec3 text_color(0);
+        r.Quad(ivec2(0), box_size).tex(ivec2(0,192)).center().alpha(about_screen_alpha);
+        r.Text(-box_size/2 + 16, "[TAU++] Частотные характеристики\n"
+                                 "\n"
+                                 "Версия " VERSION "\n"
+                                 "Билд от " __DATE__ ", " __TIME__ "\n"
+                                 "\n"
+                                 "Код: Егор Михайлов\n"
+                                 "Тестирование: Евгений Холупко, Дмитрий Бутаков\n"
+                                 "\n"
+                                 "https://github.com/HolyBlackCat/tau_plus_plus").alpha(about_screen_alpha).color(text_color).align(ivec2(-1)).font(font_small);
+    };
+
     auto Tick = [&]
     {
         Draw::Accumulator::Return();
@@ -1897,6 +2079,26 @@ int main(int, char **)
         // Disable text fields on click
         if (button_pressed)
             TextField::Deactivate();
+
+        // About
+        if (show_about)
+        {
+            about_screen_alpha += about_screen_alpha_step;
+            if (about_screen_alpha > 1)
+                about_screen_alpha = 1;
+
+            if (button_pressed || Keys::enter.pressed() || Keys::escape.pressed())
+            {
+                show_about = 0;
+                button_pressed = 0;
+            }
+        }
+        else
+        {
+            about_screen_alpha -= about_screen_alpha_step;
+            if (about_screen_alpha < 0)
+                about_screen_alpha = 0;
+        }
 
         // Table creation GUI
         if (show_table_gui)
@@ -1970,7 +2172,7 @@ int main(int, char **)
         Draw::Accumulator::Return();
 
         // Interface background
-        r.Quad(Draw::min, ivec2(win.Size().x, interface_rect_height)).color(fvec3(0.96)).alpha(interface_rect_alpha, interface_rect_alpha, interface_rect_alpha2, interface_rect_alpha2);
+        r.Quad(Draw::min, ivec2(win.Size().x, interface_rect_height)).color(fvec3(0.94, 0.94, 0.90)).alpha(interface_rect_alpha, interface_rect_alpha, interface_rect_alpha2, interface_rect_alpha2);
         r.Quad(Draw::min.add_y(interface_rect_height), ivec2(win.Size().x, 1)).color(fvec3(0));
 
         // Text fields
@@ -2033,6 +2235,10 @@ int main(int, char **)
             r.Text((table_gui_rect_size/2).mul_x(-1) + ivec2(table_gui_rect_size.x/4, -table_gui_button_h/2), "Создать").color(table_len_input.invalid ? button_color_inact : button_color);
             r.Text(table_gui_rect_size/2 - ivec2(table_gui_rect_size.x/4, table_gui_button_h/2), "Отмена").color(button_color);
         }
+
+        // About
+        if (about_screen_alpha > 0)
+            RenderAbout();
 
         // Message
         if (message_timer > 0)
