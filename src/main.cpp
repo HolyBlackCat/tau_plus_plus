@@ -1,6 +1,6 @@
 #include "everything.h"
 
-#define VERSION "1.1.1"
+#define VERSION "1.1.2"
 
 //#define FORCE_ACCUMULATOR // Use accumulator even if framebuffers are supported.
 //#define FORCE_FRAMEBUFFER // Use framebuffers, halt if not supported.
@@ -289,6 +289,17 @@ class Expression
 
         using cref = const ap_complex_t;
 
+        ap_complex_t fix() const
+        {
+            ap_complex_t ret = *this;
+            if (ret.amp < 0)
+            {
+                ret.amp = -ret.amp;
+                ret.phase += ld_pi;
+            }
+            return ret;
+        }
+
         static ap_complex_t make(long double amp, long double phase = 0)
         {
             ap_complex_t ret;
@@ -304,7 +315,7 @@ class Expression
 
         static ap_complex_t op_neg(cref a) // This normally shouldn't be used.
         {
-            return make(a.amp, ld_pi - a.phase);
+            return make(a.amp, a.phase + ld_pi);
         }
         static ap_complex_t op_add(cref a, cref b)
         {
@@ -324,7 +335,13 @@ class Expression
         }
         static ap_complex_t op_pow(cref a, cref b) // `b` should have `phase = 0`.
         {
-            return make(std::pow(a.amp, b.amp), a.phase * b.amp);
+            long double real_amp;
+            if (abs(std::fmod(b.phase, ld_pi * 2)) < ld_pi/2)
+                real_amp = b.amp;
+            else
+                real_amp = -b.amp;
+
+            return make(std::pow(a.amp, real_amp), a.phase * real_amp);
         }
     };
 
@@ -1726,8 +1743,8 @@ int main(int, char **)
     auto func_main  = [&e](long double t){return e.EvalVec({0,t});};
     auto func_real  = [&e](long double t){return ldvec2(t,e.EvalVec({0,t}).x);};
     auto func_imag  = [&e](long double t){return ldvec2(t,e.EvalVec({0,t}).y);};
-    auto func_ampl  = [&e](long double t){return ldvec2(t,e.EvalAP({0,t}).amp);};
-    auto func_phase = [&e](long double t){return ldvec2(t,e.EvalAP({0,t}).phase);};
+    auto func_ampl  = [&e](long double t){return ldvec2(t,e.EvalAP({0,t}).fix().amp);};
+    auto func_phase = [&e](long double t){return ldvec2(t,e.EvalAP({0,t}).fix().phase);};
 
     Plot plot;
 
