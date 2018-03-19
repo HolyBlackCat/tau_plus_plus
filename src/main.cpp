@@ -1,6 +1,6 @@
 #include "everything.h"
 
-#define VERSION "1.1"
+#define VERSION "1.1.1"
 
 //#define FORCE_ACCUMULATOR // Use accumulator even if framebuffers are supported.
 //#define FORCE_FRAMEBUFFER // Use framebuffers, halt if not supported.
@@ -110,7 +110,7 @@ namespace Draw
                     {
                         auto *ch_map = params.obj.state().ch_map;
                         bool first = params.index == 0,
-                             last = params.index == int(params.obj.state().str.size()) - 1;
+                             last = params.index == int(u8strlen(params.obj.state().str)) - 1;
                         int kerning = params.obj.state().ch_map->Kerning(params.prev, params.ch);
                         r.Quad(params.pos - ivec2(sides * first + kerning, ch_map->Ascent()+up),
                                ivec2(params.glyph.advance + sides * (first + last) + kerning, ch_map->Height()+up+down)).color(fvec3(1)).alpha(alpha);
@@ -1539,7 +1539,26 @@ class TextField
         }
 
         if (id == active_id)
+        {
             Input::Text(&value, max_chars, allowed_chars);
+            if (Keys::l_ctrl.down() || Keys::r_ctrl.down())
+            {
+                if (Keys::c.pressed())
+                    SDL_SetClipboardText(value.c_str());
+                if (Keys::v.pressed())
+                {
+                    auto ptr = SDL_GetClipboardText();
+                    if (ptr)
+                    {
+                        value = ptr;
+                        std::cout << value << '\n';
+                        SDL_free(ptr);
+                        value.erase(std::remove_if(value.begin(), value.end(), [&](char ch){return allowed_chars.find_first_of(ch) == allowed_chars.npos;}), value.end());
+                        Input::SetTextCursorPos(value.size()); // Yeah, this is not safe for non-ASCII characters. Good we have none here.
+                    }
+                }
+            }
+        }
 
         if (Keys::any.repeated())
             last_keypress_time = Events::Time();
@@ -1738,6 +1757,15 @@ int main(int, char **)
     bool need_interface_reset = 0;
     TextField *func_input = 0, *range_input_min = 0, *range_input_max = 0;
 
+    static auto SwapFreqLimitsIfNeeded = [&]
+    {
+        if (freq_min > freq_max)
+        {
+            std::swap(freq_min, freq_max);
+            std::swap(range_input_min->value, range_input_max->value);
+        }
+    };
+
     static auto AddInterface = [&](InterfaceObj category)
     {
         constexpr float scale_factor = 1.01;
@@ -1899,6 +1927,8 @@ int main(int, char **)
                     constexpr ivec2 text_offset(6,4);
                     constexpr float text_bg_alpha = 0.8;
 
+                    SwapFreqLimitsIfNeeded();
+
                     if (!plot)
                         return;
                     std::string file_name = "";
@@ -1912,7 +1942,12 @@ int main(int, char **)
                         case State::phase_log10:     file_name = "plot_phase_log10.png";     break;
                     }
 
-                    r.Text(Draw::min + plot.ViewportPos() + text_offset, "W(s) = " + func_input->value)
+                    std::string text_func = func_input->value, text_min = range_input_min->value, text_max = range_input_max->value;
+                    for (auto *it : {&text_func, &text_min, &text_max})
+                        it->erase(std::remove(it->begin(), it->end(), ' '), it->end());
+                    r.Text(Draw::min + plot.ViewportPos() + text_offset, "W(s) = " + text_func)
+                     .color(text_color).font(font_small).align(ivec2(-1)).preset(Draw::WithWhiteBackground(text_bg_alpha));
+                    r.Text(Draw::min + plot.ViewportPos() + text_offset.add_y(2+font_small.Height()), "Частоты от " + text_min + " до " + text_max + " рад/c")
                      .color(text_color).font(font_small).align(ivec2(-1)).preset(Draw::WithWhiteBackground(text_bg_alpha));
                     r.Finish();
 
@@ -2021,6 +2056,8 @@ int main(int, char **)
     {
         constexpr int column_w = 15, precision = 6;
 
+        SwapFreqLimitsIfNeeded();
+
         std::string file_name = "table.txt";
 
         std::ofstream out(file_name);
@@ -2029,6 +2066,13 @@ int main(int, char **)
             ShowMessage("Не могу записать таблицу в файл\n" + file_name);
             return;
         }
+
+        std::string text_func = func_input->value, text_min = range_input_min->value, text_max = range_input_max->value;
+        for (auto *it : {&text_func, &text_min, &text_max})
+            it->erase(std::remove(it->begin(), it->end(), ' '), it->end());
+        out << "W(s) = " + text_func << '\n'
+            << "Частоты от " + text_min + " до " + text_max + " рад/c\n"
+            << "Количество точек: " << table_len_input_value << "\n\n";
 
         out << std::setw(column_w) << "w"
             << std::setw(column_w) << "P(w)"
@@ -2051,6 +2095,13 @@ int main(int, char **)
                 << ' ' << std::setw(column_w-1) << std::setprecision(precision) << std::log10(freq)
                 << ' ' << std::setw(column_w-1) << std::setprecision(precision) << 20*std::log10(ampl) << '\n';
         }
+
+        if (!out)
+        {
+            ShowMessage("Не могу записать таблицу в файл\n" + file_name);
+            return;
+        }
+
         ShowMessage("Таблица сохранена в файл\n" + file_name);
     };
 
@@ -2139,13 +2190,7 @@ int main(int, char **)
 
         // Swap min and max frequency if they are in the wrong order
         if (!range_input_min->Active() && !range_input_max->Active())
-        {
-            if (freq_min > freq_max)
-            {
-                std::swap(freq_min, freq_max);
-                std::swap(range_input_min->value, range_input_max->value);
-            }
-        }
+            SwapFreqLimitsIfNeeded();
 
         // Ignore clicks on interface rectangle
         if (mouse.pos().y + win.Size().y/2 < interface_rect_height)
