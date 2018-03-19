@@ -1,6 +1,6 @@
 #include "everything.h"
 
-#define VERSION "1.1.2"
+#define VERSION "1.1.3"
 
 //#define FORCE_ACCUMULATOR // Use accumulator even if framebuffers are supported.
 //#define FORCE_FRAMEBUFFER // Use framebuffers, halt if not supported.
@@ -319,7 +319,9 @@ class Expression
         }
         static ap_complex_t op_add(cref a, cref b)
         {
-            return op_mul(ap_complex_t(make(a.amp, a.phase - b.phase).to_vec2().add_x(b.amp)), make(1, b.phase));
+            ap_complex_t tmp(make(a.amp, a.phase - b.phase).to_vec2().add_x(b.amp));
+            tmp.phase += 2 * ld_pi * std::round((a.phase - b.phase) / (2 * ld_pi)) + b.phase;
+            return tmp;
         }
         static ap_complex_t op_sub(cref a, cref b) // This normally shouldn't be used.
         {
