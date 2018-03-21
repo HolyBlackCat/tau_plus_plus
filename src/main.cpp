@@ -281,72 +281,6 @@ class Expression
   public:
     using complex_t = std::complex<long double>;
 
-    struct ap_complex_t
-    {
-        long double amp, phase;
-        ap_complex_t(long double real = 0, long double imag = 0) : amp(std::hypot(real,imag)), phase(std::atan2(imag, real)) {}
-        ap_complex_t(const ldvec2 &vec) : ap_complex_t(vec.x, vec.y) {}
-
-        using cref = const ap_complex_t;
-
-        ap_complex_t fix() const
-        {
-            ap_complex_t ret = *this;
-            if (ret.amp < 0)
-            {
-                ret.amp = -ret.amp;
-                ret.phase += ld_pi;
-            }
-            return ret;
-        }
-
-        static ap_complex_t make(long double amp, long double phase = 0)
-        {
-            ap_complex_t ret;
-            ret.amp = amp;
-            ret.phase = phase;
-            return ret;
-        }
-
-        ldvec2 to_vec2() const
-        {
-            return ldvec2(std::cos(phase)*amp, std::sin(phase)*amp);
-        }
-
-        static ap_complex_t op_neg(cref a) // This normally shouldn't be used.
-        {
-            return make(a.amp, a.phase + ld_pi);
-        }
-        static ap_complex_t op_add(cref a, cref b)
-        {
-            ap_complex_t tmp(make(a.amp, a.phase - b.phase).to_vec2().add_x(b.amp));
-            tmp.phase += 2 * ld_pi * std::round((a.phase - b.phase) / (2 * ld_pi)) + b.phase;
-            return tmp;
-        }
-        static ap_complex_t op_sub(cref a, cref b) // This normally shouldn't be used.
-        {
-            return op_add(a, op_neg(b));
-        }
-        static ap_complex_t op_mul(cref a, cref b)
-        {
-            return make(a.amp * b.amp, a.phase + b.phase);
-        }
-        static ap_complex_t op_div(cref a, cref b)
-        {
-            return make(a.amp / b.amp, a.phase - b.phase);
-        }
-        static ap_complex_t op_pow(cref a, cref b) // `b` should have `phase = 0`.
-        {
-            long double real_amp;
-            if (abs(std::fmod(b.phase, ld_pi * 2)) < ld_pi/2)
-                real_amp = b.amp;
-            else
-                real_amp = -b.amp;
-
-            return make(std::pow(a.amp, real_amp), a.phase * real_amp);
-        }
-    };
-
     struct Exception : std::exception
     {
         std::string message;
@@ -429,23 +363,22 @@ class Expression
     struct OpFunc
     {
         complex_t (*plain)(complex_t, complex_t);
-        ap_complex_t (*ap)(ap_complex_t, ap_complex_t);
     };
     static OpFunc OperatorFunc(Token::Operator op)
     {
         switch (op)
         {
           case Token::plus:
-            return {[](complex_t a, complex_t b){return a + b;}, ap_complex_t::op_add};
+            return {[](complex_t a, complex_t b){return a + b;}};
           case Token::minus:
-            return {[](complex_t a, complex_t b){return a - b;}, ap_complex_t::op_sub};
+            return {[](complex_t a, complex_t b){return a - b;}};
           case Token::mul:
           case Token::fake_mul:
-            return {[](complex_t a, complex_t b){return a * b;}, ap_complex_t::op_mul};
+            return {[](complex_t a, complex_t b){return a * b;}};
           case Token::div:
-            return {[](complex_t a, complex_t b){return a / b;}, ap_complex_t::op_div};
+            return {[](complex_t a, complex_t b){return a / b;}};
           case Token::pow:
-            return {[](complex_t a, complex_t b){return std::pow(a, b);}, ap_complex_t::op_pow};
+            return {[](complex_t a, complex_t b){return std::pow(a, b);}};
           case Token::left_paren:
             return {};
         }
@@ -919,37 +852,6 @@ class Expression
     {
         auto val = Eval(variable);
         return {val.real(), val.imag()};
-    }
-    ap_complex_t EvalAP(ap_complex_t variable) const
-    {
-        std::vector<ap_complex_t> stack;
-        for (const auto &elem : elements)
-        {
-            switch (elem.type)
-            {
-              case Element::num:
-                stack.push_back({elem.num_value.real, elem.num_value.imag});
-                break;
-              case Element::var:
-                stack.push_back(variable);
-                break;
-              case Element::op:
-                {
-                    if (stack.size() < 2)
-                        throw std::runtime_error("Ошибка при вычислении.");
-                    ap_complex_t result = elem.o.func.ap(stack[stack.size()-2], stack.back());
-                    stack.pop_back();
-                    stack.pop_back(); // Sic! We pop twice.
-                    stack.push_back(result);
-                }
-                break;
-            }
-        }
-
-        if (stack.size() != 1)
-            throw std::runtime_error("Ошибка при вычислении.");
-
-        return stack.front();
     }
 };
 
@@ -1745,8 +1647,8 @@ int main(int, char **)
     auto func_main  = [&e](long double t){return e.EvalVec({0,t});};
     auto func_real  = [&e](long double t){return ldvec2(t,e.EvalVec({0,t}).x);};
     auto func_imag  = [&e](long double t){return ldvec2(t,e.EvalVec({0,t}).y);};
-    auto func_ampl  = [&e](long double t){return ldvec2(t,e.EvalAP({0,t}).fix().amp);};
-    auto func_phase = [&e](long double t){return ldvec2(t,e.EvalAP({0,t}).fix().phase);};
+    auto func_ampl  = [&e](long double t){return ldvec2(t,e.EvalVec({0,t}).len());};
+    auto func_phase = [&e](long double t){auto v = e.EvalVec({0,t}); return ldvec2(t,std::atan2(v.y,v.x));};
 
     Plot plot;
 
