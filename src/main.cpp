@@ -16,6 +16,7 @@ extern unsigned char binary_bin_assets_Xolonium_Regular_ttf_end;
 #include <fstream>
 #include <iostream>
 #include <list>
+#include <map>
 
 Events::AutoErrorHandlers error_handlers;
 
@@ -295,10 +296,149 @@ class Expression
         }
     };
 
+    class Polynominal
+    {
+        std::map<int, long double> coefs;
+       public:
+        Polynominal() : coefs{{0, 0}} {}
+        Polynominal(long double coef, int power = 0) : coefs{{power, coef}} {}
+
+        long double X0() const
+        {
+            return coefs[0];
+        }
+        long double XN() const
+        {
+            if (coefs.empty()) return 0
+#error write me
+            }
+
+        std::string ToString() const
+        {
+            std::string ret;
+            auto it = coefs.end();
+            while (1)
+            {
+                it--;
+
+                if (ret.size())
+                    ret += (it->second < 0 ? " - " : " + ");
+                else if (it->second < 0)
+                    ret += '-';
+                ret += Math::num_to_string<long double>(abs(it->second));
+                if (it->first != 0)
+                {
+                    ret += "*x";
+                    if (it->first != 1)
+                        ret += "^" + Math::num_to_string<int>(abs(it->first));
+                }
+
+                if (it == coefs.begin())
+                    break;
+            }
+            return ret;
+        }
+
+        friend Polynominal &operator+=(Polynominal &a, const Polynominal &b)
+        {
+            for (const auto &it : b.coefs)
+                a.coefs[it.first] += it.second;
+            return a;
+        };
+        friend Polynominal &operator-=(Polynominal &a, const Polynominal &b)
+        {
+            for (const auto &it : b.coefs)
+                a.coefs[it.first] -= it.second;
+            return a;
+        };
+
+        [[nodiscard]] friend Polynominal operator+(const Polynominal &a, const Polynominal &b)
+        {
+            Polynominal ret = a;
+            ret += b;
+            return ret;
+        }
+        [[nodiscard]] friend Polynominal operator-(const Polynominal &a, const Polynominal &b)
+        {
+            Polynominal ret = a;
+            ret -= b;
+            return ret;
+        }
+
+        friend Polynominal operator*(const Polynominal &a, const Polynominal &b)
+        {
+            Polynominal ret;
+            for (const auto &x : a.coefs)
+            for (const auto &y : b.coefs)
+                ret.coefs[x.first + y.first] += x.second * y.second;
+            return ret;
+        }
+
+        friend Polynominal &operator*=(Polynominal &a, const Polynominal &b)
+        {
+            a = a * b;
+            return a;
+        }
+
+        [[nodiscard]] Polynominal Pow(int p) const
+        {
+            if (p <= 0)
+                return Polynominal(1);
+            Polynominal ret = *this;
+            while (--p > 0)
+                ret *= *this;
+            return ret;
+        }
+    };
+
+    class PolyFraction
+    {
+        Polynominal num, den;
+      public:
+        PolyFraction(const Polynominal &num = {0}, const Polynominal &den = {1}) : num(num), den(den) {}
+
+        std::string ToString() const
+        {
+            return "(" + num.ToString() + ")/(" + den.ToString() + ")";
+        }
+
+        [[nodiscard]] friend PolyFraction operator+(const PolyFraction &a, const PolyFraction &b)
+        {
+            return PolyFraction(a.num * b.den + b.num * a.den, a.den * b.den);
+        }
+        [[nodiscard]] friend PolyFraction operator-(const PolyFraction &a, const PolyFraction &b)
+        {
+            return PolyFraction(a.num * b.den - b.num * a.den, a.den * b.den);
+        }
+        [[nodiscard]] friend PolyFraction operator*(const PolyFraction &a, const PolyFraction &b)
+        {
+            return PolyFraction(a.num * b.num, a.den * b.den);
+        }
+        [[nodiscard]] friend PolyFraction operator/(const PolyFraction &a, const PolyFraction &b)
+        {
+            return PolyFraction(a.num * b.den, a.den * b.num);
+        }
+
+        friend PolyFraction &operator+=(PolyFraction &a, const PolyFraction &b) {a = a + b; return a;}
+        friend PolyFraction &operator-=(PolyFraction &a, const PolyFraction &b) {a = a - b; return a;}
+        friend PolyFraction &operator*=(PolyFraction &a, const PolyFraction &b) {a = a * b; return a;}
+        friend PolyFraction &operator/=(PolyFraction &a, const PolyFraction &b) {a = a / b; return a;}
+
+        [[nodiscard]] PolyFraction Pow(int p)
+        {
+            if (p <= 0)
+                return PolyFraction(1);
+            PolyFraction ret = *this;
+            while (--p > 0)
+                ret *= *this;
+            return ret;
+        }
+    };
+
   private:
     struct Token
     {
-        enum Type {num, lparen, rparen, op, var, imag_unit};
+        enum Type {num, lparen, rparen, op, var};
         enum Operator {plus, minus, mul, fake_mul, div, pow, left_paren};
 
         Type type;
@@ -306,7 +446,12 @@ class Expression
         union
         {
             Operator op_type;
-            long double num_value;
+            struct
+            {
+                long double value;
+                bool is_int;
+            }
+            n;
         };
 
         int starts_at;
@@ -316,15 +461,13 @@ class Expression
             switch (type)
             {
               case num:
-                return std::to_string(num_value);
+                return std::to_string(n.value);
               case lparen:
                 return "(";
               case rparen:
                 return ")";
               case var:
                 return "x";
-              case imag_unit:
-                return "j";
               case op:
                 switch (op_type)
                 {
@@ -387,8 +530,6 @@ class Expression
 
     static bool Tokenize(std::string_view str, char var_name, std::list<Token> *list, int *error_pos, std::string *error_msg)
     {
-        DebugAssert("`j` is reserved for the imaginary unit.", var_name != 'j');
-
         std::list<Token> ret;
         Token token;
 
@@ -449,6 +590,7 @@ class Expression
                 }
                 if ((ch >= '0' && ch <= '9') || ch == '.' || ch == ',')
                 {
+                    bool is_int = 1;
                     std::string num;
                     while (1)
                     {
@@ -461,6 +603,7 @@ class Expression
                     ch = str[index];
                     if (ch == '.' || ch == ',')
                     {
+                        is_int = 0;
                         index++;
                         num += '.';
                         while (1)
@@ -492,7 +635,8 @@ class Expression
                     if (auto end = Reflection::from_string(value, num.c_str()); end == num.c_str() + num.size())
                     {
                         token.type = Token::num;
-                        token.num_value = value;
+                        token.n.value = value;
+                        token.n.is_int = is_int;
                         ret.push_back(token);
                         break;
                     }
@@ -504,16 +648,9 @@ class Expression
                     index++;
                     break;
                 }
-                if (ch == 'j')
-                {
-                    token.type = Token::imag_unit;
-                    ret.push_back(token);
-                    index++;
-                    break;
-                }
 
                 *error_pos = index;
-                *error_msg = Str("Ожидалось число, переменная `", var_name, "`, мнимая единица `j`, скобка или операция.");
+                *error_msg = Str("Ожидалось число, переменная `", var_name, "`, скобка или операция.");
                 return 0;
             }
         }
@@ -535,7 +672,6 @@ class Expression
                 [[fallthrough]];
               case Token::num:
               case Token::var:
-              case Token::imag_unit:
                 if (it != prev)
                 {
                     if (it != prev && prev->type != Token::lparen && prev->type != Token::op)
@@ -566,7 +702,7 @@ class Expression
                 if (it != prev && (prev->type == Token::lparen || prev->type == Token::op))
                 {
                     *error_pos = it->starts_at;
-                    *error_msg = "Пропущено число, переменная или мнимая единица `j`.";
+                    *error_msg = "Пропущено число или переменная.";
                     return 0;
                 }
                 break;
@@ -579,7 +715,7 @@ class Expression
                         Token new_token;
                         new_token.starts_at = it->starts_at;
                         new_token.type = Token::num;
-                        new_token.num_value = -1;
+                        new_token.n.value = -1;
                         it = list.insert(it, new_token);
                         break;
                     }
@@ -646,9 +782,10 @@ class Expression
             o;
             struct
             {
-                long double real, imag;
+                long double value;
+                bool is_int;
             }
-            num_value;
+            n;
         };
     };
 
@@ -675,18 +812,8 @@ class Expression
                     Element el;
                     el.position = token.starts_at;
                     el.type = Element::num;
-                    el.num_value.real = token.num_value;
-                    el.num_value.imag = 0;
-                    elems->push_back(el);
-                }
-                break;
-              case Token::imag_unit:
-                {
-                    Element el;
-                    el.position = token.starts_at;
-                    el.type = Element::num;
-                    el.num_value.real = 0;
-                    el.num_value.imag = 1;
+                    el.n.value = token.n.value;
+                    el.n.is_int = token.n.is_int;
                     elems->push_back(el);
                 }
                 break;
@@ -758,16 +885,22 @@ class Expression
         return 1;
     }
 
-    static void ValidateExpression(const std::vector<Element> &elems)
+    static PolyFraction MakePolyFraction(const std::vector<Element> &elems)
     {
-        std::vector<bool> stack; // Stores 1 for real values and 0 for complex ones.
+        struct Elem
+        {
+            bool is_int;
+            PolyFraction frac;
+        };
+
+        std::vector<bool> stack; // Stores 1 for integers and 0 for reals and the variable.
 
         for (const auto &elem : elems)
         {
             switch (elem.type)
             {
               case Element::num:
-                stack.push_back(elem.num_value.imag == 0);
+                stack.push_back(elem.n.is_int);
                 break;
               case Element::var:
                 stack.push_back(0);
@@ -777,11 +910,11 @@ class Expression
                     if (stack.size() < 2)
                         throw Exception("Ошибка при вычислении.", 0);
                     if (elem.o.type == Token::pow && !stack.back())
-                        throw Exception("Показатель степени не может быть комплексным.", elem.position);
-                    bool is_real = stack.back() && stack[stack.size() - 2];
+                        throw Exception("Показатель степени не может быть дробным.", elem.position);
+                    bool is_int = stack.back() && stack[stack.size() - 2];
                     stack.pop_back();
                     stack.pop_back(); // Sic! We pop twice.
-                    stack.push_back(is_real);
+                    stack.push_back(is_int);
                 }
                 break;
             }
@@ -825,7 +958,7 @@ class Expression
             switch (elem.type)
             {
               case Element::num:
-                stack.push_back({elem.num_value.real, elem.num_value.imag});
+                stack.push_back({elem.n.value, 0});
                 break;
               case Element::var:
                 stack.push_back(variable);

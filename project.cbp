@@ -129,6 +129,10 @@
 		<Unit filename="src/random.h" />
 		<Unit filename="src/reflection.h" />
 		<Unit filename="src/renderers2d.h" />
+		<Unit filename="src/rpoly.f">
+			<Option weight="0" />
+			<Option compiler="gcc" use="1" buildCommand="$compiler -c $file -o $object -fdefault-double-8 -fdefault-real-8" />
+		</Unit>
 		<Unit filename="src/strings.cpp" />
 		<Unit filename="src/strings.h" />
 		<Unit filename="src/template_utils.h" />
