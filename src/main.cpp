@@ -34,6 +34,14 @@ Graphics::Font font_object_small;
 
 
 constexpr int interface_rect_height = 128;
+constexpr int max_poly_degree = 100;
+
+
+namespace External
+{
+    // This is located in `rpoly.f`, written in fortran 77.
+    extern "C" void rpoly_(double *coefs, int *inout_degree, double *out_real, double *out_imag, int *out_fail);
+}
 
 
 namespace Draw
@@ -299,19 +307,80 @@ class Expression
     class Polynominal
     {
         std::map<int, long double> coefs;
-       public:
-        Polynominal() : coefs{{0, 0}} {}
-        Polynominal(long double coef, int power = 0) : coefs{{power, coef}} {}
 
-        long double X0() const
+        void RemoveUnused()
         {
-            return coefs[0];
-        }
-        long double XN() const
-        {
-            if (coefs.empty()) return 0
-#error write me
+            auto it = coefs.begin();
+            while (it != coefs.end())
+            {
+                if (it->second == 0)
+                    it = coefs.erase(it);
+                else
+                    it++;
             }
+        }
+       public:
+        Polynominal() {}
+        Polynominal(long double coef, int power = 0)
+        {
+            if (coef != 0)
+                coefs[power] = coef;
+        }
+
+        complex_t Eval(complex_t x) const
+        {
+            complex_t ret = 0;
+            for (const auto &it : coefs)
+                ret += it.second * std::pow(x, it.first);
+            return ret;
+        }
+
+        int Degree() const
+        {
+            if (coefs.empty())
+                return 0;
+            return std::prev(coefs.end())->first;
+        }
+
+        long double FreeTerm() const
+        {
+            auto it = coefs.find(0);
+            if (it == coefs.end())
+                return 0;
+            else
+                return it->second;
+        }
+
+        // Note that roots with negative imaginary are not returned.
+        // If at least one root can't be found, returns an empty list.
+        std::vector<ldvec2> Roots() const
+        {
+            int deg = Degree(), saved_deg = deg;
+
+            std::vector<double> coef_vec(deg+1);
+            for (const auto &it : coefs)
+                coef_vec[deg - it.first] = it.second;
+
+            auto real = std::make_unique<double[]>(deg),
+                 imag = std::make_unique<double[]>(deg);
+
+            int fail = 0;
+
+            External::rpoly_(coef_vec.data(), &deg, real.get(), imag.get(), &fail);
+
+            if (fail || deg != saved_deg)
+                return {};
+
+            std::vector<ldvec2> ret;
+            for (int i = 0; i < deg; i++)
+            {
+                if (imag[i] < 0)
+                    continue;
+                ret.push_back(ldvec2(real[i], imag[i]));
+            }
+
+            return ret;
+        }
 
         std::string ToString() const
         {
@@ -319,6 +388,9 @@ class Expression
             auto it = coefs.end();
             while (1)
             {
+                if (it == coefs.begin())
+                    break;
+
                 it--;
 
                 if (ret.size())
@@ -332,9 +404,6 @@ class Expression
                     if (it->first != 1)
                         ret += "^" + Math::num_to_string<int>(abs(it->first));
                 }
-
-                if (it == coefs.begin())
-                    break;
             }
             return ret;
         }
@@ -343,12 +412,14 @@ class Expression
         {
             for (const auto &it : b.coefs)
                 a.coefs[it.first] += it.second;
+            a.RemoveUnused();
             return a;
         };
         friend Polynominal &operator-=(Polynominal &a, const Polynominal &b)
         {
             for (const auto &it : b.coefs)
                 a.coefs[it.first] -= it.second;
+            a.RemoveUnused();
             return a;
         };
 
@@ -371,23 +442,22 @@ class Expression
             for (const auto &x : a.coefs)
             for (const auto &y : b.coefs)
                 ret.coefs[x.first + y.first] += x.second * y.second;
+            ret.RemoveUnused();
             return ret;
         }
-
         friend Polynominal &operator*=(Polynominal &a, const Polynominal &b)
         {
             a = a * b;
             return a;
         }
 
-        [[nodiscard]] Polynominal Pow(int p) const
+        [[nodiscard]] bool operator==(const Polynominal &other) const
         {
-            if (p <= 0)
-                return Polynominal(1);
-            Polynominal ret = *this;
-            while (--p > 0)
-                ret *= *this;
-            return ret;
+            return coefs == other.coefs;
+        }
+        [[nodiscard]] bool operator!=(const Polynominal &other) const
+        {
+            return coefs != other.coefs;
         }
     };
 
@@ -395,7 +465,42 @@ class Expression
     {
         Polynominal num, den;
       public:
+
         PolyFraction(const Polynominal &num = {0}, const Polynominal &den = {1}) : num(num), den(den) {}
+
+        complex_t Eval(complex_t x) const
+        {
+            return num.Eval(x) / den.Eval(x);
+        }
+
+        int NumDegree() const
+        {
+            return num.Degree();
+        }
+        int DenDegree() const
+        {
+            return den.Degree();
+        }
+        int Degree() const
+        {
+            return max(num.Degree(), den.Degree());
+        }
+
+        long double FreeTermRatio() const
+        {
+            return num.FreeTerm() / den.FreeTerm();
+        }
+
+        // Note that roots with negative imaginary are not returned.
+        // If at least one root can't be found, returns an empty list.
+        std::vector<ldvec2> NumRoots() const
+        {
+            return num.Roots();
+        }
+        std::vector<ldvec2> DenRoots() const
+        {
+            return den.Roots();
+        }
 
         std::string ToString() const
         {
@@ -404,10 +509,14 @@ class Expression
 
         [[nodiscard]] friend PolyFraction operator+(const PolyFraction &a, const PolyFraction &b)
         {
+            if (a.den == b.den)
+                return PolyFraction(a.num + b.num, a.den);
             return PolyFraction(a.num * b.den + b.num * a.den, a.den * b.den);
         }
         [[nodiscard]] friend PolyFraction operator-(const PolyFraction &a, const PolyFraction &b)
         {
+            if (a.den == b.den)
+                return PolyFraction(a.num - b.num, a.den);
             return PolyFraction(a.num * b.den - b.num * a.den, a.den * b.den);
         }
         [[nodiscard]] friend PolyFraction operator*(const PolyFraction &a, const PolyFraction &b)
@@ -426,11 +535,24 @@ class Expression
 
         [[nodiscard]] PolyFraction Pow(int p)
         {
-            if (p <= 0)
+            if (p == 0)
                 return PolyFraction(1);
+
             PolyFraction ret = *this;
+
+            bool flip = 0;
+            if (p < 0)
+            {
+                p = -p;
+                flip = 1;
+            }
+
             while (--p > 0)
                 ret *= *this;
+
+            if (flip)
+                std::swap(ret.num, ret.den);
+
             return ret;
         }
     };
@@ -439,7 +561,7 @@ class Expression
     struct Token
     {
         enum Type {num, lparen, rparen, op, var};
-        enum Operator {plus, minus, mul, fake_mul, div, pow, left_paren};
+        enum Operator {plus, minus, mul, fake_mul, div, pow, left_paren}; // `fake_mul` is used for unary minus: `-a` -> `-1*a`
 
         Type type;
 
@@ -503,30 +625,29 @@ class Expression
         return op == Token::pow || op == Token::fake_mul;
     }
 
-    struct OpFunc
-    {
-        complex_t (*plain)(complex_t, complex_t);
-    };
+    using OpFunc = complex_t (*)(const complex_t &, const complex_t &);
+
     static OpFunc OperatorFunc(Token::Operator op)
     {
         switch (op)
         {
           case Token::plus:
-            return {[](complex_t a, complex_t b){return a + b;}};
+            return [](const complex_t &a, const complex_t &b){return a + b;};
           case Token::minus:
-            return {[](complex_t a, complex_t b){return a - b;}};
+            return [](const complex_t &a, const complex_t &b){return a - b;};
           case Token::mul:
           case Token::fake_mul:
-            return {[](complex_t a, complex_t b){return a * b;}};
+            return [](const complex_t &a, const complex_t &b){return a * b;};
           case Token::div:
-            return {[](complex_t a, complex_t b){return a / b;}};
+            return [](const complex_t &a, const complex_t &b){return a / b;};
           case Token::pow:
-            return {[](complex_t a, complex_t b){return std::pow(a, b);}};
+            return [](const complex_t &a, const complex_t &b){return std::pow(a, b);};
           case Token::left_paren:
-            return {};
+            return 0;
         }
-        return {};
+        return 0;
     }
+
 
     static bool Tokenize(std::string_view str, char var_name, std::list<Token> *list, int *error_pos, std::string *error_msg)
     {
@@ -702,7 +823,10 @@ class Expression
                 if (it != prev && (prev->type == Token::lparen || prev->type == Token::op))
                 {
                     *error_pos = it->starts_at;
-                    *error_msg = "Пропущено число или переменная.";
+                    if (prev->type == Token::op && prev->op_type == Token::pow)
+                        *error_msg = "Пропущено целое число.";
+                    else
+                        *error_msg = "Пропущено число или переменная.";
                     return 0;
                 }
                 break;
@@ -729,7 +853,10 @@ class Expression
                 if (it == prev || prev->type == Token::op || prev->type == Token::lparen)
                 {
                     *error_pos = it->starts_at;
-                    *error_msg = "Пропущено число или переменная.";
+                    if (prev->type == Token::op && prev->op_type == Token::pow)
+                        *error_msg = "Пропущено целое число.";
+                    else
+                        *error_msg = "Пропущено число или переменная.";
                     return 0;
                 }
                 break;
@@ -791,6 +918,13 @@ class Expression
 
     std::vector<Element> elements;
 
+    struct FractionData
+    {
+        long double factor;
+        std::vector<long double> num_roots_real, den_roots_real;
+        std::vector<complex_t> num_roots_com, den_roots_com; // Roots with negative imaginary parts are not stored.
+    };
+    FractionData frac;
 
     static bool ParseExpression(const std::list<Token> &tokens, std::vector<Element> *elems)
     {
@@ -887,34 +1021,84 @@ class Expression
 
     static PolyFraction MakePolyFraction(const std::vector<Element> &elems)
     {
-        struct Elem
+        struct StackElem
         {
-            bool is_int;
+            bool is_int_lit;
+            int int_lit_value;
             PolyFraction frac;
         };
 
-        std::vector<bool> stack; // Stores 1 for integers and 0 for reals and the variable.
+        std::vector<StackElem> stack;
 
         for (const auto &elem : elems)
         {
             switch (elem.type)
             {
               case Element::num:
-                stack.push_back(elem.n.is_int);
+                {
+                    StackElem el;
+                    if (elem.n.is_int && abs(elem.n.value) <= max_poly_degree + 0.5)
+                    {
+                        el.is_int_lit = 1;
+                        el.int_lit_value = iround(elem.n.value);
+                    }
+                    else
+                    {
+                        el.is_int_lit = 0;
+                    }
+                    el.frac = PolyFraction(Polynominal(elem.n.value));
+                    stack.push_back(el);
+                }
                 break;
               case Element::var:
-                stack.push_back(0);
+                {
+                    StackElem el;
+                    el.is_int_lit = 0;
+                    el.frac = PolyFraction(Polynominal(1, 1));
+                    stack.push_back(el);
+                }
                 break;
               case Element::op:
                 {
                     if (stack.size() < 2)
                         throw Exception("Ошибка при вычислении.", 0);
-                    if (elem.o.type == Token::pow && !stack.back())
-                        throw Exception("Показатель степени не может быть дробным.", elem.position);
-                    bool is_int = stack.back() && stack[stack.size() - 2];
+                    StackElem &p1 = stack[stack.size() - 2], &p2 = stack.back(), result;
+                    result.is_int_lit = 0;
+                    switch (elem.o.type)
+                    {
+                      case Token::plus:
+                        result.frac = p1.frac + p2.frac;
+                        break;
+                      case Token::minus:
+                        result.frac = p1.frac - p2.frac;
+                        break;
+                      case Token::fake_mul:
+                        if (p2.is_int_lit)
+                        {
+                            result.is_int_lit = 1;
+                            result.int_lit_value = -p2.int_lit_value;
+                        }
+                        [[fallthrough]];
+                      case Token::mul:
+                        result.frac = p1.frac * p2.frac;
+                        break;
+                      case Token::div:
+                        result.frac = p1.frac / p2.frac;
+                        break;
+                      case Token::pow:
+                        if (!p2.is_int_lit || abs(p2.int_lit_value) > max_poly_degree)
+                            throw Exception(Str("Показатель степени должен быть целочисленной константой не больше ", max_poly_degree, "."), elem.position);
+                        result.frac = p1.frac.Pow(p2.int_lit_value);
+                        break;
+                      case Token::left_paren:
+                        // This shouldn't happen.
+                        break;
+                    }
+                    if (result.frac.Degree() > max_poly_degree)
+                        throw Exception(Str("Операция приводит к образованию многочлена слишком большой степени (больше ", max_poly_degree, ")."), elem.position);
                     stack.pop_back();
                     stack.pop_back(); // Sic! We pop twice.
-                    stack.push_back(is_int);
+                    stack.push_back(result);
                 }
                 break;
             }
@@ -922,6 +1106,36 @@ class Expression
 
         if (stack.size() != 1)
             throw Exception("Ошибка при вычислении.", 0);
+
+        return stack[0].frac;
+    }
+
+    static void ExtractFractionData(const PolyFraction &frac, FractionData *data)
+    {
+        auto num_roots = frac.NumRoots();
+        if (num_roots.empty() && frac.NumDegree() > 0)
+            throw Exception("Не могу вычислить нули функции.", 0);
+
+        auto den_roots = frac.DenRoots();
+        if (den_roots.empty() && frac.DenDegree() > 0)
+            throw Exception("Не могу вычислить полюса функции.", 0);
+
+        for (const auto &root : num_roots)
+        {
+            if (root.y == 0)
+                data->num_roots_real.push_back(root.x);
+            else
+                data->num_roots_com.push_back({root.x, root.y});
+        }
+        for (const auto &root : den_roots)
+        {
+            if (root.y == 0)
+                data->den_roots_real.push_back(root.x);
+            else
+                data->den_roots_com.push_back({root.x, root.y});
+        }
+
+        data->factor = frac.FreeTermRatio();
     }
 
   public:
@@ -937,7 +1151,8 @@ class Expression
         {
             if (!ParseExpression(tokens, &elements))
                 throw Exception("Недопустимое выражение.", 0);
-            ValidateExpression(elements);
+            PolyFraction poly_frac = MakePolyFraction(elements);
+            ExtractFractionData(poly_frac, &frac);
         }
         else
         {
@@ -967,7 +1182,7 @@ class Expression
                 {
                     if (stack.size() < 2)
                         throw std::runtime_error("Ошибка при вычислении.");
-                    complex_t result = elem.o.func.plain(stack[stack.size()-2], stack.back());
+                    complex_t result = elem.o.func(stack[stack.size()-2], stack.back());
                     stack.pop_back();
                     stack.pop_back(); // Sic! We pop twice.
                     stack.push_back(result);
@@ -985,6 +1200,29 @@ class Expression
     {
         auto val = Eval(variable);
         return {val.real(), val.imag()};
+    }
+
+    long double EvalPhase(complex_t variable) const
+    {
+        /*
+        static bool b = 0;
+        b = !b;
+        if (b)
+            return std::arg(Eval(variable));
+        */
+
+        long double phase = 0;
+        for (const auto &root : frac.num_roots_real)
+            phase += std::arg(variable - root);
+        for (const auto &root : frac.den_roots_real)
+            phase -= std::arg(variable - root);
+        for (const auto &root : frac.num_roots_com)
+            phase += std::arg((variable - root) * (variable - std::conj(root)));
+        for (const auto &root : frac.den_roots_com)
+            phase -= std::arg((variable - root) * (variable - std::conj(root)));
+        if (frac.factor < 0)
+            phase += ld_pi;
+        return phase;
     }
 };
 
@@ -1023,7 +1261,7 @@ class Plot
 
   private:
     static constexpr float window_margin = 0.4;
-    static constexpr int window_smallest_pix_margin = 8;
+    static constexpr int window_smallest_pix_margin = 32;
 
     static constexpr int bounding_box_segment_count = 512,
                          grid_max_number_precision = 6;
@@ -1243,8 +1481,9 @@ class Plot
 
         default_offset += ViewportPos() / default_scale / 2;
 
-        if ((abs(default_offset * default_scale) > win.Size()/2).any())
-            default_offset = clamp(default_offset * default_scale, -win.Size()/2+window_smallest_pix_margin, win.Size()/2-window_smallest_pix_margin) / default_scale;
+        ldvec2 viewport_min = (Draw::min + ViewportPos() + window_smallest_pix_margin) / default_scale,
+               viewport_max = viewport_min + (ViewportSize() - window_smallest_pix_margin*2) / default_scale;
+        clamp_assign(default_offset, viewport_min, viewport_max);
     }
 
     void ResetAccumulator()
@@ -1781,7 +2020,7 @@ int main(int, char **)
     auto func_real  = [&e](long double t){return ldvec2(t,e.EvalVec({0,t}).x);};
     auto func_imag  = [&e](long double t){return ldvec2(t,e.EvalVec({0,t}).y);};
     auto func_ampl  = [&e](long double t){return ldvec2(t,e.EvalVec({0,t}).len());};
-    auto func_phase = [&e](long double t){auto v = e.EvalVec({0,t}); return ldvec2(t,std::atan2(v.y,v.x));};
+    auto func_phase = [&e](long double t){return ldvec2(t,e.EvalPhase({0,t}));};
 
     Plot plot;
 
