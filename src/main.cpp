@@ -1,6 +1,6 @@
 #include "everything.h"
 
-#define VERSION "1.1.3"
+#define VERSION "1.2"
 
 //#define FORCE_ACCUMULATOR // Use accumulator even if framebuffers are supported.
 //#define FORCE_FRAMEBUFFER // Use framebuffers, halt if not supported.
@@ -342,13 +342,13 @@ class Expression
             return std::prev(coefs.end())->first;
         }
 
-        long double FreeTerm() const
+        long double FirstFactor() const
         {
-            auto it = coefs.find(0);
-            if (it == coefs.end())
+            auto it = coefs.end();
+            if (it == coefs.begin())
                 return 0;
             else
-                return it->second;
+                return std::prev(it)->second;
         }
 
         // Note that roots with negative imaginary are not returned.
@@ -486,9 +486,13 @@ class Expression
             return max(num.Degree(), den.Degree());
         }
 
-        long double FreeTermRatio() const
+        long double NumFirstFactor() const
         {
-            return num.FreeTerm() / den.FreeTerm();
+            return num.FirstFactor();
+        }
+        long double DenFirstFactor() const
+        {
+            return den.FirstFactor();
         }
 
         // Note that roots with negative imaginary are not returned.
@@ -920,7 +924,7 @@ class Expression
 
     struct FractionData
     {
-        long double factor;
+        long double num_first_fac, den_first_fac;
         std::vector<long double> num_roots_real, den_roots_real;
         std::vector<complex_t> num_roots_com, den_roots_com; // Roots with negative imaginary parts are not stored.
     };
@@ -1135,7 +1139,8 @@ class Expression
                 data->den_roots_com.push_back({root.x, root.y});
         }
 
-        data->factor = frac.FreeTermRatio();
+        data->num_first_fac = frac.NumFirstFactor();
+        data->den_first_fac = frac.DenFirstFactor();
     }
 
   public:
@@ -1202,6 +1207,26 @@ class Expression
         return {val.real(), val.imag()};
     }
 
+    long double EvalAmplitude(complex_t variable) const
+    {
+        /*
+        static bool b = 0;
+        b = !b;
+        if (b)
+            return std::abs(Eval(variable));
+        //*/
+
+        long double ampl = frac.num_first_fac / frac.den_first_fac;
+        for (const auto &root : frac.num_roots_real)
+            ampl *= std::abs(variable - root);
+        for (const auto &root : frac.den_roots_real)
+            ampl /= std::abs(variable - root);
+        for (const auto &root : frac.num_roots_com)
+            ampl *= std::abs((variable - root) * (variable - std::conj(root)));
+        for (const auto &root : frac.den_roots_com)
+            ampl /= std::abs((variable - root) * (variable - std::conj(root)));
+        return ampl;
+    }
     long double EvalPhase(complex_t variable) const
     {
         /*
@@ -1209,7 +1234,7 @@ class Expression
         b = !b;
         if (b)
             return std::arg(Eval(variable));
-        */
+        //*/
 
         long double phase = 0;
         for (const auto &root : frac.num_roots_real)
@@ -1220,8 +1245,6 @@ class Expression
             phase += std::arg((variable - root) * (variable - std::conj(root)));
         for (const auto &root : frac.den_roots_com)
             phase -= std::arg((variable - root) * (variable - std::conj(root)));
-        if (frac.factor < 0)
-            phase += ld_pi;
         return phase;
     }
 };
@@ -1317,7 +1340,7 @@ class Plot
         if (flags & horizontal_log10)
             ret.pos.x = std::log10(ret.pos.x);
         if (flags & vertical_20log10)
-            ret.pos.y = std::log10(ret.pos.y);
+            ret.pos.y = std::log10(std::abs(ret.pos.y));
         ret.pos.y = -ret.pos.y;
         ret.valid = std::isfinite(ret.pos.x) && std::isfinite(ret.pos.y);
         return ret;
@@ -2019,7 +2042,7 @@ int main(int, char **)
     auto func_main  = [&e](long double t){return e.EvalVec({0,t});};
     auto func_real  = [&e](long double t){return ldvec2(t,e.EvalVec({0,t}).x);};
     auto func_imag  = [&e](long double t){return ldvec2(t,e.EvalVec({0,t}).y);};
-    auto func_ampl  = [&e](long double t){return ldvec2(t,e.EvalVec({0,t}).len());};
+    auto func_ampl  = [&e](long double t){return ldvec2(t,e.EvalAmplitude({0,t}));};
     auto func_phase = [&e](long double t){return ldvec2(t,e.EvalPhase({0,t}));};
 
     Plot plot;
@@ -2299,10 +2322,10 @@ int main(int, char **)
                 plot = Plot({{func_phase, fvec3(0,0.7,0.9), "ф(w)"}}, freq_min, freq_max, PlotFlags());
                 break;
               case State::amplitude_log10:
-                plot = Plot({{func_ampl, fvec3(0.9,0.4,0), "20·log{10} A(log{10} w)"}}, freq_min, freq_max, PlotFlags());
+                plot = Plot({{func_ampl, fvec3(0.9,0.4,0), "20·log{10} A(w)"}}, freq_min, freq_max, PlotFlags());
                 break;
               case State::phase_log10:
-                plot = Plot({{func_phase, fvec3(0,0.7,0.9), "ф(log{10} w)"}}, freq_min, freq_max, PlotFlags());
+                plot = Plot({{func_phase, fvec3(0,0.7,0.9), "ф(w)"}}, freq_min, freq_max, PlotFlags());
                 break;
             }
         }
