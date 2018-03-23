@@ -34,7 +34,7 @@ Graphics::Font font_object_small;
 
 
 constexpr int interface_rect_height = 128;
-constexpr int max_poly_degree = 100;
+constexpr int max_poly_degree = 50;
 
 
 namespace External
@@ -351,10 +351,20 @@ class Expression
                 return std::prev(it)->second;
         }
 
+        bool CoefsOutOfRange() const
+        {
+            // Jenkins-Traub doesn't handle large values well. Did we mess up configuration?..
+            using pair_t = const decltype(coefs)::value_type;
+            return std::max_element(coefs.begin(), coefs.end(), [](const pair_t &a, const pair_t &b){return abs(a.second) < abs(b.second);})->second > 1e300;
+        }
+
         // Note that roots with negative imaginary are not returned.
         // If at least one root can't be found, returns an empty list.
         std::vector<ldvec2> Roots() const
         {
+            if (CoefsOutOfRange())
+                return {};
+
             int deg = Degree(), saved_deg = deg;
 
             std::vector<double> coef_vec(deg+1);
@@ -924,6 +934,9 @@ class Expression
 
     struct FractionData
     {
+        bool cant_find_num_roots, cant_find_den_roots;
+        bool has_positive_roots; // Not a good thing(tm).
+        bool has_negative_first_fac_ratio; // Also not a good thing.
         long double num_first_fac, den_first_fac;
         std::vector<long double> num_roots_real, den_roots_real;
         std::vector<complex_t> num_roots_com, den_roots_com; // Roots with negative imaginary parts are not stored.
@@ -1116,13 +1129,23 @@ class Expression
 
     static void ExtractFractionData(const PolyFraction &frac, FractionData *data)
     {
-        auto num_roots = frac.NumRoots();
-        if (num_roots.empty() && frac.NumDegree() > 0)
-            throw Exception("Не могу вычислить нули функции.", 0);
+        data->num_first_fac = frac.NumFirstFactor();
+        data->den_first_fac = frac.DenFirstFactor();
 
-        auto den_roots = frac.DenRoots();
-        if (den_roots.empty() && frac.DenDegree() > 0)
-            throw Exception("Не могу вычислить полюса функции.", 0);
+        data->has_negative_first_fac_ratio = (data->num_first_fac * data->den_first_fac < 0);
+
+        auto num_roots = frac.NumRoots(),
+             den_roots = frac.DenRoots();
+
+        data->cant_find_num_roots = frac.NumDegree() && num_roots.empty();
+        data->cant_find_den_roots = frac.DenDegree() && den_roots.empty();
+
+        auto lambda_positive = [](ldvec2 v){return v.x > 0;};
+        data->has_positive_roots = std::any_of(num_roots.begin(), num_roots.end(), lambda_positive) ||
+                                   std::any_of(den_roots.begin(), den_roots.end(), lambda_positive);
+
+        if (data->cant_find_num_roots || data->cant_find_den_roots)
+            return;
 
         for (const auto &root : num_roots)
         {
@@ -1138,9 +1161,6 @@ class Expression
             else
                 data->den_roots_com.push_back({root.x, root.y});
         }
-
-        data->num_first_fac = frac.NumFirstFactor();
-        data->den_first_fac = frac.DenFirstFactor();
     }
 
   public:
@@ -1216,6 +1236,9 @@ class Expression
             return std::abs(Eval(variable));
         //*/
 
+        if ((!frac.has_positive_roots && !frac.has_negative_first_fac_ratio) || CantFindRoots())
+            return std::abs(Eval(variable));
+
         long double ampl = frac.num_first_fac / frac.den_first_fac;
         for (const auto &root : frac.num_roots_real)
             ampl *= std::abs(variable - root);
@@ -1236,6 +1259,9 @@ class Expression
             return std::arg(Eval(variable));
         //*/
 
+        if (CantFindRoots())
+            return std::arg(Eval(variable));
+
         long double phase = 0;
         for (const auto &root : frac.num_roots_real)
             phase += std::arg(variable - root);
@@ -1246,6 +1272,11 @@ class Expression
         for (const auto &root : frac.den_roots_com)
             phase -= std::arg((variable - root) * (variable - std::conj(root)));
         return phase;
+    }
+
+    bool CantFindRoots() const
+    {
+        return frac.cant_find_num_roots || frac.cant_find_den_roots;
     }
 };
 
@@ -1867,7 +1898,6 @@ class TextField
                     if (ptr)
                     {
                         value = ptr;
-                        std::cout << value << '\n';
                         SDL_free(ptr);
                         value.erase(std::remove_if(value.begin(), value.end(), [&](char ch){return allowed_chars.find_first_of(ch) == allowed_chars.npos;}), value.end());
                         Input::SetTextCursorPos(value.size()); // Yeah, this is not safe for non-ASCII characters. Good we have none here.
@@ -2542,6 +2572,14 @@ int main(int, char **)
 
         // Mode indicator
         r.Quad(-win.Size()/2 + ivec2(32).add_x(48 * int(cur_state)), ivec2(50)).color(fvec3(0)).center();
+
+        // Warnings
+        if ((cur_state == State::phase || cur_state == State::phase_log10) && e.CantFindRoots())
+        {
+            ivec2 pos(0,win.Size().y/2 * 3/4);
+            r.Quad(pos, ivec2(win.Size().x*0.82, 32)).color(fvec3(1)).alpha(0.8).center();
+            r.Text(pos, "Нули и/или полюса передаточной функции не могут быть определены. Фаза вычисляется по модулю 2п.").font(font_small).color(fvec3(0.9,0.2,0));
+        }
 
         // Buttons
         for (const auto &button : buttons)
