@@ -934,10 +934,10 @@ class Expression
 
     struct FractionData
     {
-        bool cant_find_num_roots, cant_find_den_roots;
-        bool has_positive_roots; // Not a good thing(tm).
-        bool has_negative_first_fac_ratio; // Also not a good thing.
-        long double num_first_fac, den_first_fac;
+        bool cant_find_num_roots = 0, cant_find_den_roots = 0;
+        bool has_positive_roots = 0; // Not a good thing(tm).
+        bool has_negative_first_fac_ratio = 0; // Also not a good thing.
+        long double num_first_fac = 1, den_first_fac = 1;
         std::vector<long double> num_roots_real, den_roots_real;
         std::vector<complex_t> num_roots_com, den_roots_com; // Roots with negative imaginary parts are not stored.
     };
