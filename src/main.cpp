@@ -1,6 +1,6 @@
 #include "everything.h"
 
-#define VERSION "1.2.1"
+#define VERSION "1.2.2"
 
 //#define FORCE_ACCUMULATOR // Use accumulator even if framebuffers are supported.
 //#define FORCE_FRAMEBUFFER // Use framebuffers, halt if not supported.
@@ -2425,20 +2425,20 @@ int main(int, char **)
             << std::setw(column_w) << "P(w)"
             << std::setw(column_w) << "Q(w)"
             << std::setw(column_w) << "A(w)"
-            << std::setw(column_w) << "phi(w)"
+            << std::setw(column_w+1) << "ф(w)" // `+1` because cyrillic `ф` is two bytes.
             << std::setw(column_w) << "log10(w)"
             << std::setw(column_w) << "20*log10(A)" << "\n\n";
 
         for (int i = 0; i < table_len_input_value; i++)
         {
-            long double freq = i / (long double)(table_len_input_value-1);
+            long double freq = i / (long double)(table_len_input_value-1) * (freq_max - freq_min) + freq_min;
             ldvec2 vec = func_main(freq);
-            long double ampl = func_ampl(freq).y, phase = func_phase(freq).y;
+            long double ampl = func_ampl(freq).y, phase = func_phase(freq).y / ld_pi;
             out << ' ' << std::setw(column_w-1) << std::setprecision(precision) << freq
                 << ' ' << std::setw(column_w-1) << std::setprecision(precision) << vec.x
                 << ' ' << std::setw(column_w-1) << std::setprecision(precision) << vec.y
                 << ' ' << std::setw(column_w-1) << std::setprecision(precision) << ampl
-                << ' ' << std::setw(column_w-1) << std::setprecision(precision) << phase
+                << ' ' << std::setw(column_w-2) << std::setprecision(precision) << phase << "п"
                 << ' ' << std::setw(column_w-1) << std::setprecision(precision) << std::log10(freq)
                 << ' ' << std::setw(column_w-1) << std::setprecision(precision) << 20*std::log10(ampl) << '\n';
         }
