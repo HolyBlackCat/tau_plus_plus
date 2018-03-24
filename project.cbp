@@ -89,6 +89,8 @@
 			<Add library="uuid" />
 			<Add library="freetype" />
 			<Add library="z" />
+			<Add library="gfortran" />
+			<Add library="quadmath" />
 			<Add directory="libs/win32" />
 		</Linker>
 		<Unit filename="bin/assets/Xolonium-Regular.ttf">
@@ -131,7 +133,7 @@
 		<Unit filename="src/renderers2d.h" />
 		<Unit filename="src/rpoly.f">
 			<Option weight="0" />
-			<Option compiler="gcc" use="1" buildCommand="$compiler -c $file -o $object -fdefault-double-8 -fdefault-real-8" />
+			<Option compiler="gcc" use="1" buildCommand="$compiler -c $file -o $object -fdefault-real-8" />
 		</Unit>
 		<Unit filename="src/strings.cpp" />
 		<Unit filename="src/strings.h" />

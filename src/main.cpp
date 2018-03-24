@@ -1,6 +1,6 @@
 #include "everything.h"
 
-#define VERSION "1.2.2"
+#define VERSION "1.2.3"
 
 //#define FORCE_ACCUMULATOR // Use accumulator even if framebuffers are supported.
 //#define FORCE_FRAMEBUFFER // Use framebuffers, halt if not supported.
@@ -17,6 +17,8 @@ extern unsigned char binary_bin_assets_Xolonium_Regular_ttf_end;
 #include <iostream>
 #include <list>
 #include <map>
+
+#include <quadmath.h>
 
 Events::AutoErrorHandlers error_handlers;
 
@@ -39,8 +41,11 @@ constexpr int max_poly_degree = 50;
 
 namespace External
 {
-    // This is located in `rpoly.f`, written in fortran 77.
-    extern "C" void rpoly_(double *coefs, int *inout_degree, double *out_real, double *out_imag, int *out_fail);
+    extern "C"
+    {
+        // This is located in `rpoly.f`, written in fortran 77.
+        void rpoly_(__float128 *coefs, int *inout_degree, __float128 *out_real, __float128 *out_imag, int *out_fail);
+    }
 }
 
 
@@ -367,12 +372,12 @@ class Expression
 
             int deg = Degree(), saved_deg = deg;
 
-            std::vector<double> coef_vec(deg+1);
+            std::vector<__float128> coef_vec(deg+1);
             for (const auto &it : coefs)
                 coef_vec[deg - it.first] = it.second;
 
-            auto real = std::make_unique<double[]>(deg),
-                 imag = std::make_unique<double[]>(deg);
+            auto real = std::make_unique<__float128[]>(deg),
+                 imag = std::make_unique<__float128[]>(deg);
 
             int fail = 0;
 
