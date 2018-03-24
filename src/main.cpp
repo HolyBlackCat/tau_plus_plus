@@ -1,6 +1,6 @@
 #include "everything.h"
 
-#define VERSION "1.2"
+#define VERSION "1.2.1"
 
 //#define FORCE_ACCUMULATOR // Use accumulator even if framebuffers are supported.
 //#define FORCE_FRAMEBUFFER // Use framebuffers, halt if not supported.
@@ -2069,6 +2069,7 @@ int main(int, char **)
     }
     catch (...) {}
 
+    // If you change those, don't forget to also change them in lambda MakeTable() below.
     auto func_main  = [&e](long double t){return e.EvalVec({0,t});};
     auto func_real  = [&e](long double t){return ldvec2(t,e.EvalVec({0,t}).x);};
     auto func_imag  = [&e](long double t){return ldvec2(t,e.EvalVec({0,t}).y);};
@@ -2432,7 +2433,7 @@ int main(int, char **)
         {
             long double freq = i / (long double)(table_len_input_value-1);
             ldvec2 vec = func_main(freq);
-            long double ampl = vec.len(), phase = std::atan2(vec.y, vec.x);
+            long double ampl = func_ampl(freq).y, phase = func_phase(freq).y;
             out << ' ' << std::setw(column_w-1) << std::setprecision(precision) << freq
                 << ' ' << std::setw(column_w-1) << std::setprecision(precision) << vec.x
                 << ' ' << std::setw(column_w-1) << std::setprecision(precision) << vec.y
