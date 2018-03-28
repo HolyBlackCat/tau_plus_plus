@@ -358,9 +358,23 @@ class Expression
 
         bool CoefsOutOfRange() const
         {
-            // Jenkins-Traub doesn't handle large values well. Did we mess up configuration?..
+            // Jenkins-Traub seems to not handle large values well.
+            if (coefs.empty())
+                return 0;
             using pair_t = const decltype(coefs)::value_type;
             return std::max_element(coefs.begin(), coefs.end(), [](const pair_t &a, const pair_t &b){return abs(a.second) < abs(b.second);})->second > 1e300;
+        }
+
+        bool CoefsHaveDifferentSigns() const
+        {
+            if (coefs.size() < 1)
+                return 0;
+            auto it = coefs.begin();
+            int s = sign((it++)->second);
+            while (it != coefs.end())
+                if (sign((it++)->second) != s)
+                    return 1;
+            return 0;
         }
 
         // Note that roots with negative imaginary are not returned.
@@ -508,6 +522,11 @@ class Expression
         long double DenFirstFactor() const
         {
             return den.FirstFactor();
+        }
+
+        bool CoefsHaveDifferentSigns() const
+        {
+            return num.CoefsHaveDifferentSigns() || den.CoefsHaveDifferentSigns();
         }
 
         // Note that roots with negative imaginary are not returned.
@@ -940,7 +959,7 @@ class Expression
     struct FractionData
     {
         bool cant_find_num_roots = 0, cant_find_den_roots = 0;
-        bool has_positive_roots = 0; // Not a good thing(tm).
+        bool coefs_have_different_signs = 0; // Not a good thing(tm). This is tested separately for numerator and denominator, then the result is ||'ed.
         bool has_negative_first_fac_ratio = 0; // Also not a good thing.
         long double num_first_fac = 1, den_first_fac = 1;
         std::vector<long double> num_roots_real, den_roots_real;
@@ -1145,9 +1164,7 @@ class Expression
         data->cant_find_num_roots = frac.NumDegree() && num_roots.empty();
         data->cant_find_den_roots = frac.DenDegree() && den_roots.empty();
 
-        auto lambda_positive = [](ldvec2 v){return v.x > 0;};
-        data->has_positive_roots = std::any_of(num_roots.begin(), num_roots.end(), lambda_positive) ||
-                                   std::any_of(den_roots.begin(), den_roots.end(), lambda_positive);
+        data->coefs_have_different_signs = frac.CoefsHaveDifferentSigns();
 
         if (data->cant_find_num_roots || data->cant_find_den_roots)
             return;
@@ -1241,8 +1258,8 @@ class Expression
             return std::abs(Eval(variable));
         //*/
 
-        if ((!frac.has_positive_roots && !frac.has_negative_first_fac_ratio) || CantFindRoots())
-            return std::abs(Eval(variable));
+        if (!frac.coefs_have_different_signs || CantFindRoots())
+            return std::abs(Eval(variable)) * (frac.has_negative_first_fac_ratio ? -1 : 1);
 
         long double ampl = frac.num_first_fac / frac.den_first_fac;
         for (const auto &root : frac.num_roots_real)
