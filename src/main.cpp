@@ -1,6 +1,6 @@
 #include "everything.h"
 
-#define VERSION "1.2.3"
+#define VERSION "1.2.4"
 
 //#define FORCE_ACCUMULATOR // Use accumulator even if framebuffers are supported.
 //#define FORCE_FRAMEBUFFER // Use framebuffers, halt if not supported.
@@ -402,11 +402,7 @@ class Expression
 
             std::vector<ldvec2> ret;
             for (int i = 0; i < deg; i++)
-            {
-                if (imag[i] < 0)
-                    continue;
                 ret.push_back(ldvec2(real[i], imag[i]));
-            }
 
             return ret;
         }
@@ -962,8 +958,7 @@ class Expression
         bool coefs_have_different_signs = 0; // Not a good thing(tm). This is tested separately for numerator and denominator, then the result is ||'ed.
         bool has_negative_first_fac_ratio = 0; // Also not a good thing.
         long double num_first_fac = 1, den_first_fac = 1;
-        std::vector<long double> num_roots_real, den_roots_real;
-        std::vector<complex_t> num_roots_com, den_roots_com; // Roots with negative imaginary parts are not stored.
+        std::vector<complex_t> num_roots, den_roots;
     };
     FractionData frac;
 
@@ -1170,19 +1165,9 @@ class Expression
             return;
 
         for (const auto &root : num_roots)
-        {
-            if (root.y == 0)
-                data->num_roots_real.push_back(root.x);
-            else
-                data->num_roots_com.push_back({root.x, root.y});
-        }
+            data->num_roots.push_back({root.x, root.y});
         for (const auto &root : den_roots)
-        {
-            if (root.y == 0)
-                data->den_roots_real.push_back(root.x);
-            else
-                data->den_roots_com.push_back({root.x, root.y});
-        }
+            data->den_roots.push_back({root.x, root.y});
     }
 
   public:
@@ -1262,14 +1247,10 @@ class Expression
             return std::abs(Eval(variable)) * (frac.has_negative_first_fac_ratio ? -1 : 1);
 
         long double ampl = frac.num_first_fac / frac.den_first_fac;
-        for (const auto &root : frac.num_roots_real)
+        for (const auto &root : frac.num_roots)
             ampl *= std::abs(variable - root);
-        for (const auto &root : frac.den_roots_real)
+        for (const auto &root : frac.den_roots)
             ampl /= std::abs(variable - root);
-        for (const auto &root : frac.num_roots_com)
-            ampl *= std::abs((variable - root) * (variable - std::conj(root)));
-        for (const auto &root : frac.den_roots_com)
-            ampl /= std::abs((variable - root) * (variable - std::conj(root)));
         return ampl;
     }
     long double EvalPhase(complex_t variable) const
@@ -1285,14 +1266,10 @@ class Expression
             return std::arg(Eval(variable));
 
         long double phase = 0;
-        for (const auto &root : frac.num_roots_real)
+        for (const auto &root : frac.num_roots)
             phase += std::arg(variable - root);
-        for (const auto &root : frac.den_roots_real)
+        for (const auto &root : frac.den_roots)
             phase -= std::arg(variable - root);
-        for (const auto &root : frac.num_roots_com)
-            phase += std::arg((variable - root) * (variable - std::conj(root)));
-        for (const auto &root : frac.den_roots_com)
-            phase -= std::arg((variable - root) * (variable - std::conj(root)));
         return phase;
     }
 
