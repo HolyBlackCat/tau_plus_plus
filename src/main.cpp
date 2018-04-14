@@ -1,6 +1,6 @@
 #include "everything.h"
 
-#define VERSION "1.2.4"
+#define VERSION "1.2.5"
 
 //#define FORCE_ACCUMULATOR // Use accumulator even if framebuffers are supported.
 //#define FORCE_FRAMEBUFFER // Use framebuffers, halt if not supported.
@@ -1289,6 +1289,7 @@ class Plot
         vertical_pi      = 2,
         horizontal_log10 = 4,
         vertical_20log10 = 8,
+        has_horizontal_func  = 16,
     };
 
     using func_t = std::function<ldvec2(long double)>;
@@ -1341,6 +1342,7 @@ class Plot
     ldvec2 default_offset = ivec2(0);
     ldvec2 default_scale = ldvec2(default_scale_factor);
     long double range_start = default_min, range_len = default_max - default_min;
+    long double range_start_real = default_min, range_len_real = default_max - default_min;
     long double current_value_offset = 0.5; // NOTE: These default values must be synced with those in `ResetAccumulator()`.
     unsigned long long current_value_index = 0, current_value_max_index = 1; // ^
 
@@ -1436,7 +1438,10 @@ class Plot
             // Draw points
             while (count-- > 0)
             {
-                long double value = range_start + (current_value_offset + current_value_index++ / double(current_value_max_index)) * range_len;
+                long double value = range_start_real + (current_value_offset + current_value_index++ / double(current_value_max_index)) * range_len_real;
+
+                if (flags & horizontal_log10)
+                    value = std::pow(10.0l, value);
 
                 if (current_value_index >= current_value_max_index)
                 {
@@ -1542,6 +1547,25 @@ class Plot
     void ResetAccumulator()
     {
         Graphics::Clear(Graphics::color);
+
+        { // Calculate clamped range
+            if (flags & has_horizontal_func)
+            {
+                range_start_real = range_start;
+                range_len_real = range_len;
+            }
+            else
+            {
+                long double from = range_start, to = range_start + range_len;
+                if (flags & horizontal_log10)
+                {
+                    from = std::log10(from);
+                    to = std::log10(to);
+                }
+                range_start_real = max(from, -ViewportSize().x/2 / scale.x - offset.x);
+                range_len_real = min(to, ViewportSize().x/2 / scale.x - offset.x) - range_start_real;
+            }
+        }
 
         { // Draw grid
             ldvec2 visible_size = win.Size() / scale;
@@ -2082,7 +2106,7 @@ int main(int, char **)
         switch (cur_state)
         {
           case State::main:
-            return Plot::lock_scale_ratio;
+            return Plot::lock_scale_ratio | Plot::has_horizontal_func;
           case State::phase:
             return Plot::vertical_pi;
           case State::amplitude_log10:
@@ -2199,7 +2223,7 @@ int main(int, char **)
             {
                 int x = -32;
                 buttons.push_back(Button(ivec2(1,-1), ivec2(x,32), 0, 0, "Сбросить расположение графика", [&]{plot.ResetOffsetAndScale();})); // Reset offset and scale
-                x -= 48+16;
+                x -= 48+8;
                 buttons.push_back(Button(ivec2(1,-1), ivec2(x,32), 2, 1, "Уменьшить масштаб", [&]{plot.Scale(ldvec2(1,1/scale_factor));})); // Decrease scale
                 x -= 48;
                 buttons.push_back(Button(ivec2(1,-1), ivec2(x,32), 1, 1, "Увеличить масштаб", [&]{plot.Scale(ldvec2(1,scale_factor));})); // Increase scale
@@ -2209,11 +2233,11 @@ int main(int, char **)
             {
                 int x = -32;
                 buttons.push_back(Button(ivec2(1,-1), ivec2(x,32), 0, 0, "Сбросить расположение графика", [&]{plot.ResetOffsetAndScale();})); // Reset offset and scale
-                x -= 48+16;
+                x -= 48+8;
                 buttons.push_back(Button(ivec2(1,-1), ivec2(x,32), 6, 1, "Уменьшить масштаб по оси Y", [&]{plot.Scale(ldvec2(1,1/scale_factor));})); // Decrease Y scale
                 x -= 48;
                 buttons.push_back(Button(ivec2(1,-1), ivec2(x,32), 5, 1, "Увеличить масштаб по оси Y", [&]{plot.Scale(ldvec2(1,scale_factor));})); // Increase Y scale
-                x -= 48+16;
+                x -= 48+8;
                 buttons.push_back(Button(ivec2(1,-1), ivec2(x,32), 4, 1, "Уменьшить масштаб по оси X", [&]{plot.Scale(ldvec2(1/scale_factor,1));})); // Decrease X scale
                 x -= 48;
                 buttons.push_back(Button(ivec2(1,-1), ivec2(x,32), 3, 1, "Увеличить масштаб по оси X", [&]{plot.Scale(ldvec2(scale_factor,1));})); // Increase X scale
@@ -2223,7 +2247,7 @@ int main(int, char **)
             {
                 int x = 32;
                 // Primary mode
-                buttons.push_back(Button(ivec2(-1,-1), ivec2(x,32), 7, 0, "Годограф", [&]{
+                buttons.push_back(Button(ivec2(-1,-1), ivec2(x,32), 7, 0, "Годограф амплитудно-фазовой характеристики", [&]{
                     cur_state = State::main;
                     need_interface_reset = 1;
                 }));
@@ -2262,7 +2286,7 @@ int main(int, char **)
           case InterfaceObj::export_data:
             {
                 // Save values to table
-                int x = 336;
+                int x = 320+8;
                 buttons.push_back(Button(ivec2(-1,-1), ivec2(x,32), 13, 0, "Сохранить таблицу значений", [&]{
                     if (plot)
                         show_table_gui = 1;
@@ -2324,7 +2348,7 @@ int main(int, char **)
             }
             break;
           case InterfaceObj::about:
-            buttons.push_back(Button(ivec2(-1,-1), ivec2(448,32), 15, 0, "О программе", [&]{
+            buttons.push_back(Button(ivec2(-1,-1), ivec2(416+8*2,32), 15, 0, "О программе", [&]{
                 show_about = 1;
             }));
             break;
