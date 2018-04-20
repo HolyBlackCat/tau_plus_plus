@@ -1,6 +1,6 @@
 #include "everything.h"
 
-#define VERSION "1.2.5"
+#define VERSION "1.2.6"
 
 //#define FORCE_ACCUMULATOR // Use accumulator even if framebuffers are supported.
 //#define FORCE_FRAMEBUFFER // Use framebuffers, halt if not supported.
@@ -1318,7 +1318,7 @@ class Plot
     static constexpr int window_smallest_pix_margin = 32;
 
     static constexpr int bounding_box_segment_count = 512,
-                         grid_max_number_precision = 6;
+                         grid_max_number_precision = 4;
     static constexpr float bounding_box_discarded_edges = 0.03; // Must be less than 0.5
 
     static constexpr ivec2 min_grid_cell_pixel_size = ivec2(48),
@@ -1380,11 +1380,11 @@ class Plot
 
     ldvec2 MinScale()
     {
-        return std::pow(0.1, grid_max_number_precision - 2) * ldvec2(min_grid_cell_pixel_size * 2 + 2);
+        return std::pow(0.1, grid_max_number_precision - 2 + 10) * ldvec2(min_grid_cell_pixel_size * 2 + 2);
     }
     ldvec2 MaxScale()
     {
-        return std::pow(10, grid_max_number_precision - 2) * ldvec2(min_grid_cell_pixel_size * 2 - 2);
+        return std::pow(10, grid_max_number_precision - 2 + 10) * ldvec2(min_grid_cell_pixel_size * 2 - 2);
     }
 
     void AddPoint(int type, long double value)
@@ -1642,6 +1642,20 @@ class Plot
                         if (!zero_line)
                             std::snprintf(string_buf, sizeof string_buf, "%.*Lg", grid_max_number_precision, value);
                         std::string str = string_buf;
+
+                        if (auto pos = str.find_last_of("+-"); pos != str.npos && pos != 0)
+                        {
+                            std::string new_str(str, 0, pos-1);
+                            new_str += "·10[";
+                            pos++;
+                            while (str[pos] == '0')
+                                pos++;
+                            while (str[pos])
+                                new_str += str[pos++];
+                            new_str += ']';
+                            str = new_str;
+                        }
+
                         if (!vertical)
                         {
                             if (flags & vertical_pi)
@@ -2136,9 +2150,10 @@ int main(int, char **)
         }
     };
 
+    constexpr float scale_factor = 1.012;
+
     static auto AddInterface = [&](InterfaceObj category)
     {
-        constexpr float scale_factor = 1.01;
 
         constexpr int range_input_w = 64, input_gap_w = 32;
 
