@@ -1,6 +1,6 @@
 #include "everything.h"
 
-#define VERSION "1.2.6"
+#define VERSION "1.2.7"
 
 //#define FORCE_ACCUMULATOR // Use accumulator even if framebuffers are supported.
 //#define FORCE_FRAMEBUFFER // Use framebuffers, halt if not supported.
@@ -290,45 +290,30 @@ namespace Draw
 }
 
 
-class Expression
+inline namespace MathMisc
 {
-  public:
     using complex_t = std::complex<long double>;
 
-    struct Exception : std::exception
+    template <typename T> class BasicPolynominal
     {
-        std::string message;
-        int pos;
-
-        Exception() {}
-        Exception(std::string message, int pos) : message(message), pos(pos) {}
-
-        const char *what() const noexcept override
-        {
-            return message.c_str();
-        }
-    };
-
-    class Polynominal
-    {
-        std::map<int, long double> coefs;
+        std::map<int, T> coefs;
 
         void RemoveUnused()
         {
             auto it = coefs.begin();
             while (it != coefs.end())
             {
-                if (it->second == 0)
+                if (it->second == T(0))
                     it = coefs.erase(it);
                 else
                     it++;
             }
         }
        public:
-        Polynominal() {}
-        Polynominal(long double coef, int power = 0)
+        BasicPolynominal() {}
+        BasicPolynominal(T coef, int power = 0)
         {
-            if (coef != 0)
+            if (coef != T(0))
                 coefs[power] = coef;
         }
 
@@ -346,14 +331,24 @@ class Expression
                 return 0;
             return std::prev(coefs.end())->first;
         }
-
-        long double FirstFactor() const
+        T FirstCoef() const
         {
-            auto it = coefs.end();
-            if (it == coefs.begin())
+            if (coefs.empty())
                 return 0;
+            return std::prev(coefs.end())->second;
+        }
+
+        T GetCoef(int power) const
+        {
+            if (auto it = coefs.find(power); it != coefs.end())
+                return it->second;
             else
-                return std::prev(it)->second;
+                return 0;
+        }
+        void EraseCoef(int power)
+        {
+            if (auto it = coefs.find(power); it != coefs.end())
+                coefs.erase(it);
         }
 
         bool CoefsOutOfRange() const
@@ -361,7 +356,7 @@ class Expression
             // Jenkins-Traub seems to not handle large values well.
             if (coefs.empty())
                 return 0;
-            using pair_t = const decltype(coefs)::value_type;
+            using pair_t = typename std::map<int, T>::value_type;
             return std::max_element(coefs.begin(), coefs.end(), [](const pair_t &a, const pair_t &b){return abs(a.second) < abs(b.second);})->second > 1e300;
         }
 
@@ -377,10 +372,11 @@ class Expression
             return 0;
         }
 
-        // Note that roots with negative imaginary are not returned.
         // If at least one root can't be found, returns an empty list.
         std::vector<ldvec2> Roots() const
         {
+            static_assert(std::is_arithmetic_v<T>, "Whoops!");
+
             if (CoefsOutOfRange())
                 return {};
 
@@ -407,8 +403,57 @@ class Expression
             return ret;
         }
 
+        void LongDivision(BasicPolynominal b, BasicPolynominal &quo, BasicPolynominal &rem) const
+        {
+            BasicPolynominal &a = rem;
+            a = *this;
+            a.RemoveUnused();
+            b.RemoveUnused();
+
+            int a_deg = a.Degree();
+            int b_deg = b.Degree();
+
+            if (a_deg < b_deg)
+            {
+                quo = {};
+                return;
+            }
+
+            T b_first = b.FirstCoef();
+
+            quo = {};
+
+            for (int power = a_deg - b_deg; power >= 0; power--)
+            {
+                T a_coef = a.GetCoef(power + b_deg);
+                if (a_coef == 0)
+                    continue;
+
+                T c = a_coef / b_first;
+                quo.coefs[power] = c;
+
+                a -= b * BasicPolynominal(c, power);
+                a.EraseCoef(power + b_deg);
+            }
+        }
+
         std::string ToString() const
         {
+            auto is_neg = [](T x)
+            {
+                if constexpr (std::is_arithmetic_v<T>)
+                    return x < 0;
+                else
+                    return (void(x), false);
+            };
+            auto signless = [](T x)
+            {
+                if constexpr (std::is_arithmetic_v<T>)
+                    return abs(x);
+                else
+                    return x;
+            };
+
             std::string ret;
             auto it = coefs.end();
             while (1)
@@ -419,28 +464,28 @@ class Expression
                 it--;
 
                 if (ret.size())
-                    ret += (it->second < 0 ? " - " : " + ");
-                else if (it->second < 0)
+                    ret += (is_neg(it->second) ? " - " : " + ");
+                else if (is_neg(it->second))
                     ret += '-';
-                ret += Math::num_to_string<long double>(abs(it->second));
+                ret += Str(signless(it->second));
                 if (it->first != 0)
                 {
                     ret += "*x";
                     if (it->first != 1)
-                        ret += "^" + Math::num_to_string<int>(abs(it->first));
+                        ret += "^" + Str(signless(it->first));
                 }
             }
             return ret;
         }
 
-        friend Polynominal &operator+=(Polynominal &a, const Polynominal &b)
+        friend BasicPolynominal &operator+=(BasicPolynominal &a, const BasicPolynominal &b)
         {
             for (const auto &it : b.coefs)
                 a.coefs[it.first] += it.second;
             a.RemoveUnused();
             return a;
         };
-        friend Polynominal &operator-=(Polynominal &a, const Polynominal &b)
+        friend BasicPolynominal &operator-=(BasicPolynominal &a, const BasicPolynominal &b)
         {
             for (const auto &it : b.coefs)
                 a.coefs[it.first] -= it.second;
@@ -448,50 +493,54 @@ class Expression
             return a;
         };
 
-        [[nodiscard]] friend Polynominal operator+(const Polynominal &a, const Polynominal &b)
+        [[nodiscard]] friend BasicPolynominal operator+(const BasicPolynominal &a, const BasicPolynominal &b)
         {
-            Polynominal ret = a;
+            BasicPolynominal ret = a;
             ret += b;
             return ret;
         }
-        [[nodiscard]] friend Polynominal operator-(const Polynominal &a, const Polynominal &b)
+        [[nodiscard]] friend BasicPolynominal operator-(const BasicPolynominal &a, const BasicPolynominal &b)
         {
-            Polynominal ret = a;
+            BasicPolynominal ret = a;
             ret -= b;
             return ret;
         }
 
-        friend Polynominal operator*(const Polynominal &a, const Polynominal &b)
+        friend BasicPolynominal operator*(const BasicPolynominal &a, const BasicPolynominal &b)
         {
-            Polynominal ret;
+            BasicPolynominal ret;
             for (const auto &x : a.coefs)
             for (const auto &y : b.coefs)
                 ret.coefs[x.first + y.first] += x.second * y.second;
             ret.RemoveUnused();
             return ret;
         }
-        friend Polynominal &operator*=(Polynominal &a, const Polynominal &b)
+        friend BasicPolynominal &operator*=(BasicPolynominal &a, const BasicPolynominal &b)
         {
             a = a * b;
             return a;
         }
 
-        [[nodiscard]] bool operator==(const Polynominal &other) const
+        [[nodiscard]] bool operator==(const BasicPolynominal &other) const
         {
             return coefs == other.coefs;
         }
-        [[nodiscard]] bool operator!=(const Polynominal &other) const
+        [[nodiscard]] bool operator!=(const BasicPolynominal &other) const
         {
             return coefs != other.coefs;
         }
     };
 
-    class PolyFraction
+    using Polynominal = BasicPolynominal<long double>;
+    using PolynominalC = BasicPolynominal<complex_t>;
+
+    template <typename T> class BasicPolyFraction
     {
+        using Polynominal = BasicPolynominal<T>;
         Polynominal num, den;
       public:
 
-        PolyFraction(const Polynominal &num = {0}, const Polynominal &den = {1}) : num(num), den(den) {}
+        BasicPolyFraction(const Polynominal &num = {0}, const Polynominal &den = {1}) : num(num), den(den) {}
 
         complex_t Eval(complex_t x) const
         {
@@ -511,13 +560,13 @@ class Expression
             return max(num.Degree(), den.Degree());
         }
 
-        long double NumFirstFactor() const
+        long double NumFirstCoef() const
         {
-            return num.FirstFactor();
+            return num.FirstCoef();
         }
-        long double DenFirstFactor() const
+        long double DenFirstCoef() const
         {
-            return den.FirstFactor();
+            return den.FirstCoef();
         }
 
         bool CoefsHaveDifferentSigns() const
@@ -525,7 +574,6 @@ class Expression
             return num.CoefsHaveDifferentSigns() || den.CoefsHaveDifferentSigns();
         }
 
-        // Note that roots with negative imaginary are not returned.
         // If at least one root can't be found, returns an empty list.
         std::vector<ldvec2> NumRoots() const
         {
@@ -536,43 +584,46 @@ class Expression
             return den.Roots();
         }
 
+        const Polynominal &Num() const {return num;}
+        const Polynominal &Den() const {return den;}
+
         std::string ToString() const
         {
             return "(" + num.ToString() + ")/(" + den.ToString() + ")";
         }
 
-        [[nodiscard]] friend PolyFraction operator+(const PolyFraction &a, const PolyFraction &b)
+        [[nodiscard]] friend BasicPolyFraction operator+(const BasicPolyFraction &a, const BasicPolyFraction &b)
         {
             if (a.den == b.den)
-                return PolyFraction(a.num + b.num, a.den);
-            return PolyFraction(a.num * b.den + b.num * a.den, a.den * b.den);
+                return BasicPolyFraction(a.num + b.num, a.den);
+            return BasicPolyFraction(a.num * b.den + b.num * a.den, a.den * b.den);
         }
-        [[nodiscard]] friend PolyFraction operator-(const PolyFraction &a, const PolyFraction &b)
+        [[nodiscard]] friend BasicPolyFraction operator-(const BasicPolyFraction &a, const BasicPolyFraction &b)
         {
             if (a.den == b.den)
-                return PolyFraction(a.num - b.num, a.den);
-            return PolyFraction(a.num * b.den - b.num * a.den, a.den * b.den);
+                return BasicPolyFraction(a.num - b.num, a.den);
+            return BasicPolyFraction(a.num * b.den - b.num * a.den, a.den * b.den);
         }
-        [[nodiscard]] friend PolyFraction operator*(const PolyFraction &a, const PolyFraction &b)
+        [[nodiscard]] friend BasicPolyFraction operator*(const BasicPolyFraction &a, const BasicPolyFraction &b)
         {
-            return PolyFraction(a.num * b.num, a.den * b.den);
+            return BasicPolyFraction(a.num * b.num, a.den * b.den);
         }
-        [[nodiscard]] friend PolyFraction operator/(const PolyFraction &a, const PolyFraction &b)
+        [[nodiscard]] friend BasicPolyFraction operator/(const BasicPolyFraction &a, const BasicPolyFraction &b)
         {
-            return PolyFraction(a.num * b.den, a.den * b.num);
+            return BasicPolyFraction(a.num * b.den, a.den * b.num);
         }
 
-        friend PolyFraction &operator+=(PolyFraction &a, const PolyFraction &b) {a = a + b; return a;}
-        friend PolyFraction &operator-=(PolyFraction &a, const PolyFraction &b) {a = a - b; return a;}
-        friend PolyFraction &operator*=(PolyFraction &a, const PolyFraction &b) {a = a * b; return a;}
-        friend PolyFraction &operator/=(PolyFraction &a, const PolyFraction &b) {a = a / b; return a;}
+        friend BasicPolyFraction &operator+=(BasicPolyFraction &a, const BasicPolyFraction &b) {a = a + b; return a;}
+        friend BasicPolyFraction &operator-=(BasicPolyFraction &a, const BasicPolyFraction &b) {a = a - b; return a;}
+        friend BasicPolyFraction &operator*=(BasicPolyFraction &a, const BasicPolyFraction &b) {a = a * b; return a;}
+        friend BasicPolyFraction &operator/=(BasicPolyFraction &a, const BasicPolyFraction &b) {a = a / b; return a;}
 
-        [[nodiscard]] PolyFraction Pow(int p)
+        [[nodiscard]] BasicPolyFraction Pow(int p)
         {
             if (p == 0)
-                return PolyFraction(1);
+                return BasicPolyFraction(1);
 
-            PolyFraction ret = *this;
+            BasicPolyFraction ret = *this;
 
             bool flip = 0;
             if (p < 0)
@@ -588,6 +639,81 @@ class Expression
                 std::swap(ret.num, ret.den);
 
             return ret;
+        }
+    };
+
+    using PolyFraction = BasicPolyFraction<long double>;
+    using PolyFractionC = BasicPolyFraction<complex_t>;
+
+    template <typename T> std::vector<T> SolveLinearSystem(int n, std::vector<T> a)
+    {
+        const int s = n+1;
+
+        // First pass
+        for (int i = 0; i < n; i++)
+        {
+            // Find max row
+            auto max = abs(a[i + i*s]);
+            int max_index = i;
+            for (int j = i+1; j < n; j++)
+            {
+                auto cur = abs(a[i + j*s]);
+                if (cur > max)
+                {
+                    max = cur;
+                    max_index = j;
+                }
+            }
+
+            // Swap max row with current
+            if (max_index != i)
+                std::swap_ranges(&a[i*s], &a[i*s] + s, &a[max_index*s]);
+
+            // Subtract current row from ones below
+            for (int j = i+1; j<n; j++)
+            {
+                T c = -a[i + j*s] / a[i + i*s];
+
+                a[i + j*s] = 0;
+
+                for (int k = i+1; k < n+1; k++)
+                    a[k + j*s] += c * a[k + i*s];
+            }
+        }
+
+        std::vector<T> x(n);
+
+        // Second pass
+        for (int i = n-1; i >= 0; i--)
+        {
+            T cur_x = x[i] = a[n + i*s] / a[i + i*s];
+
+            for (int j = 0; j < i; j++)
+                a[n + j*s] -= a[i + j*s] * cur_x;
+        }
+
+        if (std::all_of(x.begin(), x.end(), [](T x){return std::isfinite(x.real()) && std::isfinite(x.imag());}))
+            return x;
+        else
+            return {};
+    }
+}
+
+
+class Expression
+{
+  public:
+    struct Exception : std::exception
+    {
+        std::string message;
+        int pos;
+
+        Exception() {}
+        Exception(std::string message, int pos) : message(message), pos(pos) {}
+
+        const char *what() const noexcept override
+        {
+            return message.c_str();
         }
     };
 
@@ -959,6 +1085,8 @@ class Expression
         bool has_negative_first_fac_ratio = 0; // Also not a good thing.
         long double num_first_fac = 1, den_first_fac = 1;
         std::vector<complex_t> num_roots, den_roots;
+
+        PolyFraction fraction;
     };
     FractionData frac;
 
@@ -1148,8 +1276,8 @@ class Expression
 
     static void ExtractFractionData(const PolyFraction &frac, FractionData *data)
     {
-        data->num_first_fac = frac.NumFirstFactor();
-        data->den_first_fac = frac.DenFirstFactor();
+        data->num_first_fac = frac.NumFirstCoef();
+        data->den_first_fac = frac.DenFirstCoef();
 
         data->has_negative_first_fac_ratio = (data->num_first_fac * data->den_first_fac < 0);
 
@@ -1170,6 +1298,20 @@ class Expression
             data->den_roots.push_back({root.x, root.y});
     }
 
+    struct StepResponseData
+    {
+        bool dirty = 1;
+
+        struct Element
+        {
+            // value = a * t^p * exp(t*b) * (t >= 0)
+            complex_t a, b;
+            int p;
+        };
+        std::vector<Element> elems; // Sum values for all elements to obtain the final value.
+    };
+    StepResponseData step_response;
+
   public:
     Expression() {}
     Expression(std::string str, char var = 's')
@@ -1183,8 +1325,8 @@ class Expression
         {
             if (!ParseExpression(tokens, &elements))
                 throw Exception("Недопустимое выражение.", 0);
-            PolyFraction poly_frac = MakePolyFraction(elements);
-            ExtractFractionData(poly_frac, &frac);
+            frac.fraction = MakePolyFraction(elements);
+            ExtractFractionData(frac.fraction, &frac);
         }
         else
         {
@@ -1272,10 +1414,161 @@ class Expression
             phase -= std::arg(variable - root);
         return phase;
     }
+    long double EvalStepResponse(long double t)
+    {
+        ComputeStepResponse();
+
+        if (t < 0)
+            return 0;
+
+        complex_t ret = 0;
+
+        for (const auto &it : step_response.elems)
+            ret += it.a * std::pow(t, it.p) * std::exp(t * it.b);
+
+        return ret.real();
+    }
 
     bool CantFindRoots() const
     {
         return frac.cant_find_num_roots || frac.cant_find_den_roots;
+    }
+
+    void ComputeStepResponse()
+    {
+        const long double root_epsilon = 0.00001; // Roots closer to each other than this value
+
+        if (!step_response.dirty)
+            return;
+        step_response.dirty = 0;
+
+        struct Root
+        {
+            complex_t value = 0;
+            int count = 0;
+
+            Root() {}
+            Root(complex_t value, int count) : value(value), count(count) {}
+        };
+        std::vector<Root> roots;
+        int root_count = 0;
+
+        { // Find out what roots we have and how many times they are repeated
+            if (frac.cant_find_den_roots)
+                return;
+            auto roots_raw = frac.den_roots;
+            roots_raw.push_back(0); // That's `*= 1/s`.
+            std::vector<std::vector<int>> root_reach_list(roots_raw.size());
+
+            // For each root, find equal or almost equal roots
+            for (size_t i = 0; i < roots_raw.size(); i++)
+            {
+                for (size_t j = 0; j < roots_raw.size(); j++)
+                {
+                    if (std::abs(roots_raw[i] - roots_raw[j]) < root_epsilon)
+                        root_reach_list[i].push_back(j);
+                }
+            }
+
+            int remaining_roots = roots_raw.size();
+
+            while (remaining_roots > 0)
+            {
+                auto max = std::max_element(root_reach_list.begin(), root_reach_list.end(), [](const std::vector<int> &a, const std::vector<int> &b){return a.size() < b.size();});
+                std::vector<int> elems = *max;
+                for (auto &vec : root_reach_list)
+                    vec.erase(std::remove_if(vec.begin(), vec.end(), [&](int x){return std::find(elems.begin(), elems.end(), x) != elems.end();}), vec.end());
+                int count = elems.size();
+                complex_t average = 0;
+                for (int el : elems)
+                    average += roots_raw[el];
+                average /= count;
+                roots.push_back(Root(average, count));
+                remaining_roots -= count;
+            }
+
+            root_count = roots_raw.size();
+        }
+
+        std::vector<complex_t> system_matrix(root_count * (root_count + 1));
+        int stride = root_count + 1;
+        Polynominal num, unused;
+        frac.fraction.Num().LongDivision(frac.fraction.Den() * Polynominal(1,1), unused, num);
+        (void)unused;
+
+        // Compute the right hand side of the equations
+        for (int i = 0; i < root_count; i++)
+            system_matrix[root_count + stride*i] = num.GetCoef(i) / frac.den_first_fac;
+
+        struct PartialFrac
+        {
+            int root, power;
+            PartialFrac() {}
+            PartialFrac(int root, int power) : root(root), power(power) {}
+        };
+        std::vector<PartialFrac> partial_fracs;
+
+        for (size_t i = 0; i < roots.size(); i++)
+        for (int j = 1; j <= roots[i].count; j++)
+        {
+            partial_fracs.push_back(PartialFrac(i, j));
+        }
+
+        for (int i = 0; i < root_count; i++)
+        {
+            PolynominalC poly(1);
+            int this_root = partial_fracs[i].root;
+            int this_power = partial_fracs[i].power;
+            for (int j = 0; j < int(roots.size()); j++)
+            {
+                if (j == this_root)
+                    continue;
+                for (int k = 1; k <= roots[j].count; k++)
+                    poly *= PolynominalC(1,1) - roots[j].value;
+            }
+            for (int j = 1; j <= roots[this_root].count - this_power; j++)
+                poly *= PolynominalC(1,1) - roots[this_root].value;
+
+            for (int j = 0; j < root_count; j++)
+                system_matrix[i + stride*j] = poly.GetCoef(j);
+        }
+
+        auto values = SolveLinearSystem(root_count, system_matrix);
+        if (values.empty())
+            return;
+
+        step_response.elems = {};
+        for (int i = 0; i < root_count; i++)
+        {
+            auto &pf = partial_fracs[i];
+            StepResponseData::Element new_elem;
+            new_elem.a = values[i] / complex_t(std::tgamma((long double)pf.power));
+            //std::cout << "... " << values[i] << '\n';
+            new_elem.b = roots[pf.root].value;
+            new_elem.p = pf.power - 1;
+            step_response.elems.push_back(new_elem);
+            /*/
+            PolynominalC poly(1);
+            for (int j = 0; j < pf.power; j++)
+                poly *= PolynominalC(1,1) - roots[pf.root].value;
+            std::cout << PolyFractionC(values[i], poly).ToString() << '\n';
+            //*/
+        }
+
+        /*/
+        std::cout << "value = sigma: a * t^p * exp(t*b)\n";
+        for (auto it : step_response.elems)
+        {
+            std::cout << "a = " << it.a << "\n";
+            std::cout << "b = " << it.b << "\n";
+            std::cout << "p = " << it.p << "\n";
+        }
+        //*/
+    }
+
+    const auto &GetFracData() const
+    {
+        return frac;
     }
 };
 
@@ -1402,6 +1695,8 @@ class Plot
     }
 
   public:
+    bool draw_area = 0;
+    long double area_a = 0, area_mid = 0, area_b = 0;
 
     Plot(int flags = 0) : flags(flags)
     {
@@ -1698,6 +1993,14 @@ class Plot
             lambda(1, &ldvec2::x, &ldvec2::y, &ivec2::x, &ivec2::y);
             lambda(1, &ldvec2::y, &ldvec2::x, &ivec2::y, &ivec2::x);
             r.Finish();
+        }
+
+        // Draw colored area
+        if (draw_area)
+        {
+            constexpr long double width = 3;
+            r.Quad(ldvec2(Draw::min.x, (-area_a + offset.y) * scale.y), ldvec2(Draw::max.x, (-area_b + offset.y) * scale.y)).absolute().color(fvec3(0.3,1,0.2)).alpha(0.7);
+            r.Quad(ldvec2(Draw::min.x, (-area_mid + offset.y) * scale.y - width/2), ldvec2(Draw::max.x, (-area_mid + offset.y) * scale.y + width/2)).absolute().color(fvec3(0.3,1,0.2)*0.6).alpha(1);
         }
 
         { // Curve names
@@ -2073,6 +2376,8 @@ int main(int, char **)
     constexpr ivec2 table_gui_rect_size(400,300), table_gui_offset(64,80);
     constexpr int table_gui_button_h = 48;
     constexpr int message_timer_start = 150, message_alpha_time = 60;
+    constexpr ivec2 misc_button_size = ivec2(460,64);
+
 
     Draw::Init();
 
@@ -2080,10 +2385,13 @@ int main(int, char **)
     Graphics::Clear(Graphics::color);
     Draw::Accumulator::Overwrite();
 
-    enum class State {main, real_imag, amplitude, phase, amplitude_log10, phase_log10};
+    enum class State {main, real_imag, amplitude, phase, amplitude_log10, phase_log10, step};
     State cur_state = State::main;
 
     long double freq_min = Plot::default_min, freq_max = Plot::default_max;
+
+    constexpr long double time_min_def = -5, time_max_def = 20;
+    long double time_min = time_min_def, time_max = time_max_def;
 
     bool show_table_gui = 0;
 
@@ -2099,6 +2407,8 @@ int main(int, char **)
     float about_screen_alpha = 0;
     constexpr float about_screen_alpha_step = 0.1;
 
+    bool show_misc = 0;
+
     Expression e;
     try
     {
@@ -2112,6 +2422,7 @@ int main(int, char **)
     auto func_imag  = [&e](long double t){return ldvec2(t,e.EvalVec({0,t}).y);};
     auto func_ampl  = [&e](long double t){return ldvec2(t,e.EvalAmplitude({0,t}));};
     auto func_phase = [&e](long double t){return ldvec2(t,e.EvalPhase({0,t}));};
+    auto func_step  = [&e](long double t){return ldvec2(t,e.EvalStepResponse(t));};
 
     Plot plot;
 
@@ -2136,10 +2447,10 @@ int main(int, char **)
     std::list<Button> buttons;
     std::list<TextField> text_fields;
 
-    enum class InterfaceObj {func_input, range_input, scale_xy, scale, mode, export_data, about};
+    enum class InterfaceObj {func_input, range_input, scale_xy, scale, mode, export_data, misc, about};
 
     bool need_interface_reset = 0;
-    TextField *func_input = 0, *range_input_min = 0, *range_input_max = 0;
+    TextField *func_input = 0, *range_input_min = 0, *range_input_max = 0, *time_input_min = 0, *time_input_max = 0;
 
     static auto SwapFreqLimitsIfNeeded = [&]
     {
@@ -2232,6 +2543,19 @@ int main(int, char **)
                     Lambda(ref, freq_max, upd);
                 }));
                 text_fields.back().value = Reflection::to_string(Plot::default_max);
+
+                time_input_min = &text_fields.emplace_back(TextField(ivec2(-1,-1), ivec2(24, 80), 64, 6, "Мин. время", "0123456789.,-", [&, Lambda](TextField &ref, bool upd) mutable
+                {
+                    Lambda(ref, time_min, upd);
+                }));
+                text_fields.back().value = Reflection::to_string(time_min_def);
+                text_fields.back().visible = 0;
+                time_input_max = &text_fields.emplace_back(TextField(ivec2(-1,-1), ivec2(24+range_input_w+input_gap_w, 80), 64, 6, "Макс. время", "0123456789.,-", [&, Lambda](TextField &ref, bool upd) mutable
+                {
+                    Lambda(ref, time_max, upd);
+                }));
+                text_fields.back().value = Reflection::to_string(time_max_def);
+                text_fields.back().visible = 0;
             }
             break;
           case InterfaceObj::scale:
@@ -2325,6 +2649,7 @@ int main(int, char **)
                         case State::phase:           file_name = "plot_phase.png";           break;
                         case State::amplitude_log10: file_name = "plot_amplitude_log10.png"; break;
                         case State::phase_log10:     file_name = "plot_phase_log10.png";     break;
+                        case State::step:            file_name = "plot_step_response.png";     break;
                     }
 
                     std::string text_func = func_input->value, text_min = range_input_min->value, text_max = range_input_max->value;
@@ -2362,8 +2687,13 @@ int main(int, char **)
                 }));
             }
             break;
+          case InterfaceObj::misc:
+            buttons.push_back(Button(ivec2(-1,-1), ivec2(416+8*2,32), 15, 0, "Прочее", [&]{
+                show_misc = 1;
+            }));
+            break;
           case InterfaceObj::about:
-            buttons.push_back(Button(ivec2(-1,-1), ivec2(416+8*2,32), 15, 0, "О программе", [&]{
+            buttons.push_back(Button(ivec2(-1,-1), ivec2(416+8*3+48,32), 16, 0, "О программе", [&]{
                 show_about = 1;
             }));
             break;
@@ -2396,6 +2726,40 @@ int main(int, char **)
               case State::phase_log10:
                 plot = Plot({{func_phase, fvec3(0,0.7,0.9), "ф(w)"}}, freq_min, freq_max, PlotFlags());
                 break;
+              case State::step:
+                plot = Plot({{func_step, fvec3(0,0,0), "h(t)"}}, time_min, time_max, PlotFlags());
+                {
+                    long double dst = e.EvalVec({0,0}).x;
+
+                    bool stable = 1;
+                    const auto &frac = e.GetFracData();
+                    if (frac.cant_find_den_roots)
+                    {
+                        stable = 0;
+                    }
+                    else
+                    {
+                        for (const auto &it : frac.den_roots)
+                        {
+                            if (it.real() >= 0)
+                            {
+                                stable = 0;
+                                break;
+                            }
+                        }
+                    }
+
+                    //std::cout << dst << '\n';
+                    if (stable && std::isfinite(dst))
+                    {
+                        plot.draw_area = 1;
+                        plot.area_mid = dst;
+                        plot.area_a = dst*(1-0.05);
+                        plot.area_b = dst*(1+0.05);
+                        plot.ResetAccumulator();
+                    }
+                }
+                break;
             }
         }
 
@@ -2404,7 +2768,13 @@ int main(int, char **)
         AddInterface(cur_state == State::main ? InterfaceObj::scale : InterfaceObj::scale_xy);
         AddInterface(InterfaceObj::mode);
         AddInterface(InterfaceObj::export_data);
+        AddInterface(InterfaceObj::misc);
         AddInterface(InterfaceObj::about);
+
+        range_input_min->visible = (cur_state != State::step);
+        range_input_max->visible = (cur_state != State::step);
+        time_input_min->visible = (cur_state == State::step);
+        time_input_max->visible = (cur_state == State::step);
     };
     AddInterface(InterfaceObj::func_input);
     AddInterface(InterfaceObj::range_input);
@@ -2506,6 +2876,72 @@ int main(int, char **)
                                  "https://github.com/HolyBlackCat/tau_plus_plus").alpha(about_screen_alpha).color(text_color).align(ivec2(-1)).font(font_small);
     };
 
+    struct MiscButton
+    {
+        std::string text;
+        std::function<void()> func;
+    };
+    std::vector<MiscButton> misc_buttons
+    {
+        { "Построить переходную функцию h(t)", [&]
+            {
+                cur_state = State::step;
+                show_misc = 0;
+                need_interface_reset = 1;
+            }
+        },
+        { "Изменить нули и полюса", [&]
+            {
+                std::cout << "2...\n";
+            }
+        },
+    };
+
+    auto MiscMenuTick = [&](bool &button_pressed)
+    {
+        if (Keys::escape.pressed())
+        {
+            show_misc = 0;
+            return;
+        }
+        if ((abs(mouse.pos() - ivec2(Draw::max.x - 24, Draw::min.y + 24)) <= 24).all() && button_pressed)
+        {
+            show_misc = 0;
+            button_pressed = 0;
+            return;
+        }
+
+        int y_pos = -int(misc_buttons.size()) * misc_button_size.y/2;
+        for (int i = 0; i < int(misc_buttons.size()); i++)
+        {
+            if ((abs(mouse.pos() - ivec2(0, y_pos + (i+0.5) * misc_button_size.y)) < misc_button_size/2).all() && button_pressed)
+            {
+                button_pressed = 0;
+                misc_buttons[i].func();
+            }
+        }
+
+        button_pressed = 0;
+    };
+    auto MiscMenuRender = [&]
+    {
+        Draw::Overlay(1);
+        if ((abs(mouse.pos() - ivec2(Draw::max.x - 24, Draw::min.y + 24)) <= 24).all())
+            r.Quad(ivec2(Draw::max.x - 24, Draw::min.y + 24), ivec2(44)).color(fvec3(1)).alpha(0.15).center();
+        r.Quad(ivec2(Draw::max.x - 24, Draw::min.y + 24), ivec2(48)).tex(ivec2(96,32)).center();
+
+        int y_pos = -int(misc_buttons.size()) * misc_button_size.y/2;
+        for (int i = 0; i < int(misc_buttons.size()); i++)
+        {
+            bool hovered = (abs(mouse.pos() - ivec2(0, y_pos + (i+0.5) * misc_button_size.y)) < misc_button_size/2).all();
+            r.Quad(ivec2(0, y_pos + (i+0.5) * misc_button_size.y), misc_button_size-16).color(fvec3(0)).alpha(0.5).center();
+            if (hovered)
+                r.Quad(ivec2(0, y_pos + (i+0.5) * misc_button_size.y), misc_button_size-16).color(fvec3(1)).alpha(0.1).center();
+
+            r.Text(ivec2(0, y_pos + (i+0.5) * misc_button_size.y), misc_buttons[i].text).color(fvec3(1));
+        }
+    };
+
     auto Tick = [&]
     {
         Draw::Accumulator::Return();
@@ -2557,6 +2993,11 @@ int main(int, char **)
             button_pressed = 0;
         }
 
+        // Misc menu
+        if (show_misc)
+            MiscMenuTick(button_pressed);
+
+
         // Text fields
         for (auto &text_field : text_fields)
             text_field.Tick(button_pressed);
@@ -2564,7 +3005,7 @@ int main(int, char **)
         // Buttons
         Button::ResetTooltip();
         for (auto &button : buttons)
-            button.Tick(button_pressed, show_table_gui);
+            button.Tick(button_pressed, show_table_gui || show_misc);
 
         // Interface reset if needed
         if (need_interface_reset)
@@ -2610,7 +3051,8 @@ int main(int, char **)
             text_field.Render();
 
         // Mode indicator
-        r.Quad(-win.Size()/2 + ivec2(32).add_x(48 * int(cur_state)), ivec2(50)).color(fvec3(0)).center();
+        if (cur_state != State::step)
+            r.Quad(-win.Size()/2 + ivec2(32).add_x(48 * int(cur_state)), ivec2(50)).color(fvec3(0)).center();
 
         // Warnings
         if ((cur_state == State::phase || cur_state == State::phase_log10) && e.CantFindRoots())
@@ -2673,6 +3115,10 @@ int main(int, char **)
             r.Text((table_gui_rect_size/2).mul_x(-1) + ivec2(table_gui_rect_size.x/4, -table_gui_button_h/2), "Создать").color(table_len_input.invalid ? button_color_inact : button_color);
             r.Text(table_gui_rect_size/2 - ivec2(table_gui_rect_size.x/4, table_gui_button_h/2), "Отмена").color(button_color);
         }
+
+        // Misc menu
+        if (show_misc)
+            MiscMenuRender();
 
         // About
         if (about_screen_alpha > 0)
