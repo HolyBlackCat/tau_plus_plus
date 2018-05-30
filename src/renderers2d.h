@@ -909,9 +909,9 @@ namespace Renderers
         void Create(int size, const Graphics::Shader::Config &cfg = shader_config)
         {
             constexpr const char *v = R"(
-VARYING( vec4 , color       )
-VARYING( vec2 , texture_pos )
-VARYING( vec3 , factors     )
+varying vec4 v_color;
+varying vec2 v_texture_pos;
+varying vec3 v_factors;
 void main()
 {
     gl_Position = u_matrix * vec4(a_pos, 0, 1);
@@ -920,9 +920,9 @@ void main()
     v_factors     = a_factors;
 })";
             constexpr const char *f = R"(
-VARYING( vec4 , color       )
-VARYING( vec2 , texture_pos )
-VARYING( vec3 , factors     )
+varying vec4 v_color;
+varying vec2 v_texture_pos;
+varying vec3 v_factors;
 void main()
 {
     vec4 tex_color = texture2D(u_texture, v_texture_pos);

@@ -1423,7 +1423,7 @@ namespace Graphics
 
         struct Config
         {
-            std::string version = "330 compatibility";
+            std::string version = "120";
             std::string vertex_header, fragment_header;
             std::string uniform = "uniform";
             std::string uniform_prefix = "u_";
@@ -1551,11 +1551,11 @@ namespace Graphics
         {
             (void)uniforms;
             std::string v, f;
-            v = "#version " + cfg.version + '\n' + cfg.vertex_header + '\n';
-            f = "#version " + cfg.version + '\n' + cfg.fragment_header + '\n';
+            //v = "#version " + cfg.version + '\n' + cfg.vertex_header + '\n';
+            //f = "#version " + cfg.version + '\n' + cfg.fragment_header + '\n';
             std::vector<Attribute> attribute_vector;
-            v += "#define VARYING(type,name) " + cfg.varying_vertex   + " type " + (cfg.varying_prefix.size() ? cfg.varying_prefix + "##name;\n" : "name;\n");
-            f += "#define VARYING(type,name) " + cfg.varying_fragment + " type " + (cfg.varying_prefix.size() ? cfg.varying_prefix + "##name;\n" : "name;\n");
+            //v += "#define VARYING(type,name) " + cfg.varying_vertex   + " type " + (cfg.varying_prefix.size() ? cfg.varying_prefix + "##name;\n" : "name;\n");
+            //f += "#define VARYING(type,name) " + cfg.varying_fragment + " type " + (cfg.varying_prefix.size() ? cfg.varying_prefix + "##name;\n" : "name;\n");
             if constexpr (!std::is_void_v<ReflUniforms>)
             {
                 constexpr int field_count = Reflection::Interface::field_count<ReflUniforms>();
