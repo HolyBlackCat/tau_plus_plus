@@ -3298,9 +3298,9 @@ int main(int, char **)
             r.Quad(ivec2(Draw::max.x - 80, Draw::max.y - 40), ivec2(100,40)).color(fvec3(1)).alpha(0.2).center();
 
         if (root_ed_num_sel != -1)
-            r.Text(ivec2(0, Draw::max.y-80), "Нажмите чтобы удалить нуль").color(fvec3(1,0,0));
+            r.Text(ivec2(0, Draw::max.y-150), "Нажмите чтобы удалить нуль").color(fvec3(1,0,0));
         else if (root_ed_den_sel != -1)
-            r.Text(ivec2(0, Draw::max.y-80), "Нажмите чтобы удалить полюс").color(fvec3(1,0,0));
+            r.Text(ivec2(0, Draw::max.y-150), "Нажмите чтобы удалить полюс").color(fvec3(1,0,0));
 
         if (e.CantFindRoots())
             r.Text(ivec2(0, Draw::max.y-20), "Нули и/или полюса не могут быть определены").color(fvec3(1,0,0)).font(font_small);
