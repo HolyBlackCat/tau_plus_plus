@@ -477,6 +477,41 @@ inline namespace MathMisc
             }
             return ret;
         }
+        std::string ToStringDense() const
+        {
+            static_assert(std::is_arithmetic_v<T>, "Whoops!");
+
+            if (coefs.empty())
+                return "0";
+
+            std::string ret;
+
+            auto it = coefs.end();
+            while (1)
+            {
+                if (it == coefs.begin())
+                    break;
+
+                it--;
+
+                if (ret.size() && it->second >= 0)
+                    ret += "+";
+                char buf[64];
+                std::snprintf(buf, sizeof buf, "%.8Lf", (long double)it->second);
+                std::string sbuf = buf;
+                while (sbuf.size() > 0 && (sbuf.back() == '0' || sbuf.back() == '.'))
+                    sbuf.resize(sbuf.size() - 1);
+                ret += sbuf;
+                if (it->first != 0)
+                {
+                    ret += "s";
+                    if (it->first != 1)
+                        ret += std::to_string(it->first);
+                }
+            }
+
+            return ret;
+        }
 
         friend BasicPolynominal &operator+=(BasicPolynominal &a, const BasicPolynominal &b)
         {
@@ -1274,7 +1309,7 @@ class Expression
         return stack[0].frac;
     }
 
-    static void ExtractFractionData(const PolyFraction &frac, FractionData *data)
+    static void ExtractFractionData(const PolyFraction &frac, FractionData *data, bool find_roots = 1)
     {
         data->num_first_fac = frac.NumFirstCoef();
         data->den_first_fac = frac.DenFirstCoef();
@@ -1284,18 +1319,24 @@ class Expression
         auto num_roots = frac.NumRoots(),
              den_roots = frac.DenRoots();
 
-        data->cant_find_num_roots = frac.NumDegree() && num_roots.empty();
-        data->cant_find_den_roots = frac.DenDegree() && den_roots.empty();
+        if (find_roots)
+        {
+            data->cant_find_num_roots = frac.NumDegree() && num_roots.empty();
+            data->cant_find_den_roots = frac.DenDegree() && den_roots.empty();
+        }
 
         data->coefs_have_different_signs = frac.CoefsHaveDifferentSigns();
 
         if (data->cant_find_num_roots || data->cant_find_den_roots)
             return;
 
-        for (const auto &root : num_roots)
-            data->num_roots.push_back({root.x, root.y});
-        for (const auto &root : den_roots)
-            data->den_roots.push_back({root.x, root.y});
+        if (find_roots)
+        {
+            for (const auto &root : num_roots)
+                data->num_roots.push_back({root.x, root.y});
+            for (const auto &root : den_roots)
+                data->den_roots.push_back({root.x, root.y});
+        }
     }
 
     struct StepResponseData
@@ -1327,6 +1368,60 @@ class Expression
                 throw Exception("Недопустимое выражение.", 0);
             frac.fraction = MakePolyFraction(elements);
             ExtractFractionData(frac.fraction, &frac);
+        }
+        else
+        {
+            throw Exception(err_msg, err_pos);
+        }
+    }
+    // Those roots must have -1 imag part if they're real, or 0+ imag part if they're complex.
+    Expression(long double factor, const std::vector<complex_t> &num_roots, const std::vector<complex_t> &den_roots, std::string *text = 0)
+    {
+        Polynominal num(factor), den(1);
+        for (const auto &it : num_roots)
+        {
+            if (it.imag() < -0.5)
+            {
+                num *= Polynominal(1,1) - it.real();
+                frac.num_roots.push_back({it.real(), 0});
+            }
+            else
+            {
+                num *= Polynominal(1,2) + ipow(it.real(),2) + ipow(it.imag(),2) - 2 * it.real() * Polynominal(1,1);
+                frac.num_roots.push_back({it.real(), it.imag()});
+                frac.num_roots.push_back({it.real(), -it.imag()});
+            }
+        }
+        for (const auto &it : den_roots)
+        {
+            if (it.imag() < -0.5)
+            {
+                den *= Polynominal(1,1) - it.real();
+                frac.den_roots.push_back({it.real(), 0});
+            }
+            else
+            {
+                den *= Polynominal(1,2) + ipow(it.real(),2) + ipow(it.imag(),2) - 2 * it.real() * Polynominal(1,1);
+                frac.den_roots.push_back({it.real(), it.imag()});
+                frac.den_roots.push_back({it.real(), -it.imag()});
+            }
+        }
+
+        std::string str = "(" + num.ToStringDense() + ") / (" + den.ToStringDense() + ")";
+        if (text)
+            *text = str;
+
+        std::list<Expression::Token> tokens;
+        int err_pos;
+        std::string err_msg;
+
+        if (Tokenize(str, 's', &tokens, &err_pos, &err_msg) &&
+            FinalizeTokenList(tokens, &err_pos, &err_msg))
+        {
+            if (!ParseExpression(tokens, &elements))
+                throw Exception("Недопустимое выражение.", 0);
+            frac.fraction = PolyFraction(num, den);
+            ExtractFractionData(frac.fraction, &frac, 0);
         }
         else
         {
@@ -1942,6 +2037,8 @@ class Plot
                         {
                             std::string new_str(str, 0, pos-1);
                             new_str += "·10[";
+                            if (str[pos] == '-')
+                                new_str += "-";
                             pos++;
                             while (str[pos] == '0')
                                 pos++;
@@ -2253,7 +2350,7 @@ class TextField
             tick_func(*this, value != saved_value);
     }
 
-    void Render() const
+    void Render(bool inv = 0) const
     {
         constexpr int fancy_shade_width = 32; // This appears on edjes if text is too long.
         constexpr fvec3 back_color(1);
@@ -2270,10 +2367,10 @@ class TextField
         if (selected)
             r.Quad(screen_pos-1, screen_size+2).color(fvec3(0)).alpha(0.5);
         r.Quad(screen_pos, screen_size).color(fvec3(0));
-        r.Quad(screen_pos+1, screen_size-2).color(back_color);
+        r.Quad(screen_pos+1, screen_size-2).color(!inv ? back_color : back_color*0.7f);
 
         // Title
-        r.Text(screen_pos, title).color(title_color).font(font_small).align(ivec2(-1,1));
+        r.Text(screen_pos, title).color(!inv ? title_color : 1-title_color).font(font_small).align(ivec2(-1,1));
 
         // Invalid text
         r.Text(screen_pos.add_y(height), invalid_text).color(title_color).font(font_small).align(ivec2(-1,-1)).color(invalid_color);
@@ -2408,6 +2505,7 @@ int main(int, char **)
     constexpr float about_screen_alpha_step = 0.1;
 
     bool show_misc = 0;
+    bool show_root_editor = 0;
 
     Expression e;
     try
@@ -2415,6 +2513,9 @@ int main(int, char **)
         e = Expression(default_expression);
     }
     catch (...) {}
+
+    std::vector<complex_t> e_num_roots, e_den_roots;
+    long double e_main_factor = 1;
 
     // If you change those, don't forget to also change them in lambda MakeTable() below.
     auto func_main  = [&e](long double t){return e.EvalVec({0,t});};
@@ -2445,12 +2546,13 @@ int main(int, char **)
     };
 
     std::list<Button> buttons;
-    std::list<TextField> text_fields;
+    std::list<TextField> text_fields, root_ed_text_fields;
 
-    enum class InterfaceObj {func_input, range_input, scale_xy, scale, mode, export_data, misc, about};
+    enum class InterfaceObj {func_input, range_input, scale_xy, scale, mode, export_data, misc, about, root_ed};
 
     bool need_interface_reset = 0;
-    TextField *func_input = 0, *range_input_min = 0, *range_input_max = 0, *time_input_min = 0, *time_input_max = 0;
+    TextField *func_input = 0, *range_input_min = 0, *range_input_max = 0, *time_input_min = 0, *time_input_max = 0,
+              *root_input_re = 0, *root_input_im = 0, *root_input_fac = 0;
 
     static auto SwapFreqLimitsIfNeeded = [&]
     {
@@ -2463,9 +2565,30 @@ int main(int, char **)
 
     constexpr float scale_factor = 1.012;
 
+    auto RegenerateExprFromRoots = [&]
+    {
+        plot.ResetAccumulator();
+        try
+        {
+            e = Expression(e_main_factor, e_num_roots, e_den_roots, &func_input->value);
+            func_input->invalid = 0;
+            func_input->invalid_pos = 0;
+            func_input->invalid_text = "";
+        }
+        catch (Expression::Exception &exc)
+        {
+            e = {};
+            func_input->invalid = 1;
+            func_input->invalid_pos = exc.pos;
+            func_input->invalid_text = exc.message;
+        }
+        need_interface_reset = 1;
+    };
+
+    long double root_ed_inp_re = 0, root_ed_inp_im = 0;
+
     static auto AddInterface = [&](InterfaceObj category)
     {
-
         constexpr int range_input_w = 64, input_gap_w = 32;
 
         switch (category)
@@ -2480,6 +2603,35 @@ int main(int, char **)
                     try
                     {
                         e = Expression(ref.value);
+                        e_num_roots = e.GetFracData().num_roots;
+                        e_den_roots = e.GetFracData().den_roots;
+                        e_main_factor = e.GetFracData().num_first_fac / e.GetFracData().den_first_fac;
+                        if (root_input_fac)
+                        {
+                            char buffer[64];
+                            std::snprintf(buffer, sizeof buffer, "%.6Lf", e_main_factor);
+                            std::string sbuf = buffer;
+                            while (sbuf.size() > 0 && (sbuf.back() == '0' || sbuf.back() == '.'))
+                                sbuf.resize(sbuf.size() - 1);
+                            root_input_fac->value = sbuf;
+                        }
+                        for (auto *ptr : {&e_num_roots, &e_den_roots})
+                        {
+                            auto it = ptr->begin();
+                            while (it != ptr->end())
+                            {
+                                if (it->imag() < 0)
+                                {
+                                    it = ptr->erase(it);
+                                    continue;
+                                }
+                                if (it->imag() == 0)
+                                {
+                                    *it = complex_t(it->real(), -1);
+                                }
+                                it++;
+                            }
+                        }
                         ref.invalid = 0;
                         ref.invalid_pos = 0;
                         ref.invalid_text = "";
@@ -2487,6 +2639,11 @@ int main(int, char **)
                     catch (Expression::Exception &exc)
                     {
                         e = {};
+                        e_main_factor = 1;
+                        if (root_input_fac)
+                            root_input_fac->value = "1";
+                        e_num_roots = {};
+                        e_den_roots = {};
                         ref.invalid = 1;
                         ref.invalid_pos = exc.pos;
                         ref.invalid_text = exc.message;
@@ -2697,6 +2854,73 @@ int main(int, char **)
                 show_about = 1;
             }));
             break;
+          case InterfaceObj::root_ed:
+            auto Lambda = [&, last_valid = std::string(), last_valid_cur = int()](TextField &ref, long double *param, bool upd) mutable
+            {
+                if (!upd && ref.Active())
+                {
+                    last_valid = ref.value;
+                    last_valid_cur = Input::TextCursorPos();
+                    return;
+                }
+                if (upd)
+                {
+                    std::string value_copy = ref.value;
+                    std::replace(value_copy.begin(), value_copy.end(), ',', '.');
+                    bool ok = 1;
+                    if (auto pos = value_copy.find_last_of('-'); pos != value_copy.npos && pos != 0)
+                        ok = 0;
+                    if (std::count(value_copy.begin(), value_copy.end(), '.') > 1)
+                        ok = 0;
+                    if (!ok)
+                    {
+                        ref.value = last_valid;
+                        Input::SetTextCursorPos(last_valid_cur);
+                    }
+                    else
+                    {
+                        last_valid = ref.value;
+                        last_valid_cur = Input::TextCursorPos();
+                    }
+                    if (param)
+                    {
+                        *param = 0;
+                        Reflection::from_string(*param, value_copy.c_str());
+                    }
+                    need_interface_reset = 1;
+                }
+            };
+            root_input_re = &root_ed_text_fields.emplace_back(TextField(ivec2(1,1), ivec2(-280, -100), 120, 20, "Действ. часть", "0123456789.,-", [&, Lambda](TextField &ref, bool upd) mutable
+            {
+                Lambda(ref, &root_ed_inp_re, upd);
+            }));
+            root_ed_text_fields.back().value = "0";
+            root_input_im = &root_ed_text_fields.emplace_back(TextField(ivec2(1,1), ivec2(-140, -100), 120, 20, "Мнимая часть", "0123456789.,-", [&, Lambda](TextField &ref, bool upd) mutable
+            {
+                Lambda(ref, &root_ed_inp_im, upd);
+            }));
+            root_ed_text_fields.back().value = "0";
+            root_input_fac = &root_ed_text_fields.emplace_back(TextField(ivec2(-1,1), ivec2(30, -50), 100, 20, "Коэф. усиления", "0123456789.,-", [&, Lambda](TextField &ref, bool upd) mutable
+            {
+                Lambda(ref, 0, upd);
+
+                if (upd)
+                {
+                    try
+                    {
+                        e_main_factor = std::stold(ref.value);
+                        ref.invalid = 0;
+                    }
+                    catch (...)
+                    {
+                        e_main_factor = 1;
+                        ref.invalid = 1;
+                    }
+                    RegenerateExprFromRoots();
+                }
+            }));
+            root_ed_text_fields.back().value = "1";
+            break;
         }
     };
 
@@ -2778,6 +3002,7 @@ int main(int, char **)
     };
     AddInterface(InterfaceObj::func_input);
     AddInterface(InterfaceObj::range_input);
+    AddInterface(InterfaceObj::root_ed);
     ResetInterface();
 
     int table_len_input_value = 101;
@@ -2851,6 +3076,20 @@ int main(int, char **)
                 << ' ' << std::setw(column_w-1) << std::setprecision(precision) << 20*std::log10(ampl) << '\n';
         }
 
+        out << "\n\n"
+            << "h(t)\n"
+            << "Время от " + time_input_min->value + " до " + time_input_max->value << " c\n"
+            << "Количество точек: " << table_len_input_value << "\n\n";
+        out << std::setw(column_w) << "t"
+            << std::setw(column_w) << "h(t)" << "\n\n";
+
+        for (int i = 0; i < table_len_input_value; i++)
+        {
+            long double time = i / (long double)(table_len_input_value-1) * (time_max - time_min) + time_min;
+            out << ' ' << std::setw(column_w-1) << std::setprecision(precision) << time
+                << ' ' << std::setw(column_w-1) << std::setprecision(precision) << func_step(time).y << '\n';
+        }
+
         if (!out)
         {
             ShowMessage("Не могу записать таблицу в файл\n" + file_name);
@@ -2885,14 +3124,15 @@ int main(int, char **)
     {
         { "Построить переходную функцию h(t)", [&]
             {
-                cur_state = State::step;
                 show_misc = 0;
+                cur_state = State::step;
                 need_interface_reset = 1;
             }
         },
-        { "Изменить нули и полюса", [&]
+        { "Нули и полюса", [&]
             {
-                std::cout << "2...\n";
+                show_misc = 0;
+                show_root_editor = 1;
             }
         },
     };
@@ -2940,6 +3180,134 @@ int main(int, char **)
 
             r.Text(ivec2(0, y_pos + (i+0.5) * misc_button_size.y), misc_buttons[i].text).color(fvec3(1));
         }
+    };
+
+    int root_ed_num_sel = -1, root_ed_den_sel = -1;
+    int root_ed_add_sel = -1;
+
+    auto RootEditorTick = [&](bool &button_pressed)
+    {
+        // Text fields
+        for (auto &text_field : root_ed_text_fields)
+            text_field.Tick(button_pressed);
+
+        if (Keys::escape.pressed())
+        {
+            show_root_editor = 0;
+            return;
+        }
+        if ((abs(mouse.pos() - ivec2(Draw::max.x - 24, Draw::min.y + 24)) <= 24).all() && button_pressed)
+        {
+            show_root_editor = 0;
+            button_pressed = 0;
+            return;
+        }
+
+        root_ed_num_sel = -1;
+        for (int i = 0; i < int(e_num_roots.size()); i++)
+        {
+            if ((abs(mouse.pos() - ivec2(Draw::min.x/2, Draw::min.y + 32 + i*16)) <= ivec2(200,16)/2).all())
+            {
+                root_ed_num_sel = i;
+                break;
+            }
+        }
+
+        root_ed_den_sel = -1;
+        for (int i = 0; i < int(e_den_roots.size()); i++)
+        {
+            if ((abs(mouse.pos() - ivec2(Draw::max.x/2, Draw::min.y + 32 + i*16)) <= ivec2(200,16)/2).all())
+            {
+                root_ed_den_sel = i;
+                break;
+            }
+        }
+
+        root_ed_add_sel = -1;
+        if ((abs(mouse.pos() - ivec2(Draw::max.x - 220, Draw::max.y - 40)) <= ivec2(50,20)).all())
+            root_ed_add_sel = 0;
+        else if ((abs(mouse.pos() - ivec2(Draw::max.x - 80, Draw::max.y - 40)) <= ivec2(50,20)).all())
+            root_ed_add_sel = 1;
+
+        if ((root_ed_num_sel != -1 || root_ed_den_sel != -1) && button_pressed)
+        {
+            button_pressed = 0;
+
+            if (root_ed_num_sel != -1)
+                e_num_roots.erase(e_num_roots.begin() + root_ed_num_sel);
+            else
+                e_den_roots.erase(e_den_roots.begin() + root_ed_den_sel);
+
+            RegenerateExprFromRoots();
+        }
+
+        if (root_ed_add_sel != -1 && button_pressed)
+        {
+            button_pressed = 0;
+
+            std::vector<complex_t> &dst = (root_ed_add_sel == 0 ? e_num_roots : e_den_roots);
+
+            if (dst.size() < 25)
+            {
+                if (root_ed_inp_im == 0)
+                    dst.push_back({root_ed_inp_re, -1});
+                else
+                    dst.push_back({root_ed_inp_re, abs(root_ed_inp_im)});
+            }
+
+            RegenerateExprFromRoots();
+        }
+
+        button_pressed = 0;
+    };
+    auto RootEditorRender = [&]
+    {
+        Draw::Overlay(1);
+        if ((abs(mouse.pos() - ivec2(Draw::max.x - 24, Draw::min.y + 24)) <= 24).all())
+            r.Quad(ivec2(Draw::max.x - 24, Draw::min.y + 24), ivec2(44)).color(fvec3(1)).alpha(0.15).center();
+        r.Quad(ivec2(Draw::max.x - 24, Draw::min.y + 24), ivec2(48)).tex(ivec2(96,32)).center();
+
+        r.Text(ivec2(Draw::min.x/2, Draw::min.y+16), "Нули").color(fvec3(1)).font(font_small);
+        r.Text(ivec2(Draw::max.x/2, Draw::min.y+16), "Полюса").color(fvec3(1)).font(font_small);
+
+
+        for (size_t i = 0; i < e_num_roots.size(); i++)
+        {
+            char buffer[64];
+            if (e_num_roots[i].imag() < -0.5)
+                std::snprintf(buffer, sizeof buffer, "%.6Lg", e_num_roots[i].real());
+            else
+                std::snprintf(buffer, sizeof buffer, "%.6Lg +-j %.6Lg", e_num_roots[i].real(), e_num_roots[i].imag());
+            r.Text(ivec2(Draw::min.x/2 - 96, Draw::min.y + 32 + i*16), buffer).color(int(i) == root_ed_num_sel ? fvec3(1,0,0) : fvec3(1)).font(font_small).align_h(-1);
+        }
+        for (size_t i = 0; i < e_den_roots.size(); i++)
+        {
+            char buffer[64];
+            if (e_den_roots[i].imag() < -0.5)
+                std::snprintf(buffer, sizeof buffer, "%.6Lg", e_den_roots[i].real());
+            else
+                std::snprintf(buffer, sizeof buffer, "%.6Lg +-j %.6Lg", e_den_roots[i].real(), e_den_roots[i].imag());
+            r.Text(ivec2(Draw::max.x/2 - 96, Draw::min.y + 32 + i*16), buffer).color(int(i) == root_ed_den_sel ? fvec3(1,0,0) : fvec3(1)).font(font_small).align_h(-1);
+        }
+
+        r.Text(ivec2(Draw::max.x - 220, Draw::max.y - 40), "Добавить\nнуль").color(fvec3(1)).font(font_small);
+        r.Text(ivec2(Draw::max.x - 80, Draw::max.y - 40), "Добавить\nполюс").color(fvec3(1)).font(font_small);
+        if (root_ed_add_sel == 0)
+            r.Quad(ivec2(Draw::max.x - 220, Draw::max.y - 40), ivec2(100,40)).color(fvec3(1)).alpha(0.2).center();
+        else if (root_ed_add_sel == 1)
+            r.Quad(ivec2(Draw::max.x - 80, Draw::max.y - 40), ivec2(100,40)).color(fvec3(1)).alpha(0.2).center();
+
+        if (root_ed_num_sel != -1)
+            r.Text(ivec2(0, Draw::max.y-80), "Нажмите чтобы удалить нуль").color(fvec3(1,0,0));
+        else if (root_ed_den_sel != -1)
+            r.Text(ivec2(0, Draw::max.y-80), "Нажмите чтобы удалить полюс").color(fvec3(1,0,0));
+
+        if (e.CantFindRoots())
+            r.Text(ivec2(0, Draw::max.y-20), "Нули и/или полюса не могут быть определены").color(fvec3(1,0,0)).font(font_small);
+
+        // Text fields
+        for (auto &text_field : root_ed_text_fields)
+            text_field.Render(1);
     };
 
     auto Tick = [&]
@@ -2997,6 +3365,10 @@ int main(int, char **)
         if (show_misc)
             MiscMenuTick(button_pressed);
 
+        // Root editor
+        if (show_root_editor)
+            RootEditorTick(button_pressed);
+
 
         // Text fields
         for (auto &text_field : text_fields)
@@ -3005,7 +3377,7 @@ int main(int, char **)
         // Buttons
         Button::ResetTooltip();
         for (auto &button : buttons)
-            button.Tick(button_pressed, show_table_gui || show_misc);
+            button.Tick(button_pressed, show_table_gui || show_misc || show_root_editor);
 
         // Interface reset if needed
         if (need_interface_reset)
@@ -3119,6 +3491,11 @@ int main(int, char **)
         // Misc menu
         if (show_misc)
             MiscMenuRender();
+
+        // Root editor
+        if (show_root_editor)
+            RootEditorRender();
+
 
         // About
         if (about_screen_alpha > 0)
