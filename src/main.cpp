@@ -3082,47 +3082,75 @@ int main(int, char **)
             return;
         }
 
-        std::string text_func = func_input->value, text_min = range_input_min->value, text_max = range_input_max->value;
-        for (auto *it : {&text_func, &text_min, &text_max})
-            it->erase(std::remove(it->begin(), it->end(), ' '), it->end());
-        out << "W(s) = " + text_func << '\n'
-            << "Частоты от " + text_min + " до " + text_max + " рад/c\n"
-            << "Количество точек: " << table_len_input_value << "\n\n";
-
-        out << std::setw(column_w) << "w"
-            << std::setw(column_w) << "P(w)"
-            << std::setw(column_w) << "Q(w)"
-            << std::setw(column_w) << "A(w)"
-            << std::setw(column_w+1) << "ф(w)" // `+1` because cyrillic `ф` is two bytes.
-            << std::setw(column_w) << "log10(w)"
-            << std::setw(column_w) << "20*log10(A)" << "\n\n";
-
-        for (int i = 0; i < table_len_input_value; i++)
+        if (cur_state != State::step)
         {
-            long double freq = i / (long double)(table_len_input_value-1) * (freq_max - freq_min) + freq_min;
-            ldvec2 vec = func_main(freq);
-            long double ampl = func_ampl(freq).y, phase = func_phase(freq).y / ld_pi;
-            out << ' ' << std::setw(column_w-1) << std::setprecision(precision) << freq
-                << ' ' << std::setw(column_w-1) << std::setprecision(precision) << vec.x
-                << ' ' << std::setw(column_w-1) << std::setprecision(precision) << vec.y
-                << ' ' << std::setw(column_w-1) << std::setprecision(precision) << ampl
-                << ' ' << std::setw(column_w-2) << std::setprecision(precision) << phase << "п"
-                << ' ' << std::setw(column_w-1) << std::setprecision(precision) << std::log10(freq)
-                << ' ' << std::setw(column_w-1) << std::setprecision(precision) << 20*std::log10(ampl) << '\n';
+            std::string text_func = func_input->value, text_min = range_input_min->value, text_max = range_input_max->value;
+            for (auto *it : {&text_func, &text_min, &text_max})
+                it->erase(std::remove(it->begin(), it->end(), ' '), it->end());
+            out << "W(s) = " + text_func << '\n'
+                << "Частоты от " + text_min + " до " + text_max + " рад/c\n"
+                << "Количество точек: " << table_len_input_value << "\n\n";
+
+            out << std::setw(column_w) << "w"
+                << std::setw(column_w) << "P(w)"
+                << std::setw(column_w) << "Q(w)"
+                << std::setw(column_w) << "A(w)"
+                << std::setw(column_w+1) << "ф(w)" // `+1` because cyrillic `ф` is two bytes.
+                << std::setw(column_w) << "log10(w)"
+                << std::setw(column_w) << "20*log10(A)" << "\n\n";
+
+            for (int i = 0; i < table_len_input_value; i++)
+            {
+                long double freq = i / (long double)(table_len_input_value-1) * (freq_max - freq_min) + freq_min;
+                ldvec2 vec = func_main(freq);
+                long double ampl = func_ampl(freq).y, phase = func_phase(freq).y / ld_pi;
+                out << ' ' << std::setw(column_w-1) << std::setprecision(precision) << freq
+                    << ' ' << std::setw(column_w-1) << std::setprecision(precision) << vec.x
+                    << ' ' << std::setw(column_w-1) << std::setprecision(precision) << vec.y
+                    << ' ' << std::setw(column_w-1) << std::setprecision(precision) << ampl
+                    << ' ' << std::setw(column_w-2) << std::setprecision(precision) << phase << "п"
+                    << ' ' << std::setw(column_w-1) << std::setprecision(precision) << std::log10(freq)
+                    << ' ' << std::setw(column_w-1) << std::setprecision(precision) << 20*std::log10(ampl) << '\n';
+            }
         }
-
-        out << "\n\n"
-            << "h(t)\n"
-            << "Время от " + time_input_min->value + " до " + time_input_max->value << " c\n"
-            << "Количество точек: " << table_len_input_value << "\n\n";
-        out << std::setw(column_w) << "t"
-            << std::setw(column_w) << "h(t)" << "\n\n";
-
-        for (int i = 0; i < table_len_input_value; i++)
+        else
         {
-            long double time = i / (long double)(table_len_input_value-1) * (time_max - time_min) + time_min;
-            out << ' ' << std::setw(column_w-1) << std::setprecision(precision) << time
-                << ' ' << std::setw(column_w-1) << std::setprecision(precision) << func_step(time).y << '\n';
+            std::string text_func = func_input->value, text_min = time_input_min->value, text_max = time_input_max->value;
+            for (auto *it : {&text_func, &text_min, &text_max})
+                it->erase(std::remove(it->begin(), it->end(), ' '), it->end());
+            out << "W(s) = " + text_func << '\n'
+                << "Время от " + text_min + " до " + text_max + " c\n"
+                << "Количество точек: " << table_len_input_value << "\n\n";
+
+            out << "Нули:\n";
+            for (const auto &it : e.GetFracData().num_roots)
+            {
+                if (it.imag() == 0)
+                    out << it.real() << '\n';
+                else
+                    out << it.real() << (it.imag() >= 0 ? " + j" : " - j") << abs(it.imag()) << '\n';
+            }
+            out << '\n';
+
+            out << "Полюса:\n";
+            for (const auto &it : e.GetFracData().den_roots)
+            {
+                if (it.imag() == 0)
+                    out << it.real() << '\n';
+                else
+                    out << it.real() << (it.imag() >= 0 ? " + j" : " - j") << abs(it.imag()) << '\n';
+            }
+            out << '\n';
+
+            out << std::setw(column_w) << "t"
+                << std::setw(column_w) << "h(t)" << "\n\n";
+
+            for (int i = 0; i < table_len_input_value; i++)
+            {
+                long double time = i / (long double)(table_len_input_value-1) * (time_max - time_min) + time_min;
+                out << ' ' << std::setw(column_w-1) << std::setprecision(precision) << time
+                    << ' ' << std::setw(column_w-1) << std::setprecision(precision) << func_step(time).y << '\n';
+            }
         }
 
         if (!out)
@@ -3502,9 +3530,18 @@ int main(int, char **)
             r.Text(ivec2(0,-table_gui_rect_size.y/2), "Создание таблицы").color(title_color).align_v(-1);
             r.Quad(ivec2(0,-table_gui_rect_size.y/2+font_main.Height()), ivec2(table_gui_rect_size.x+2,1)).color(rect_frame_color).center();
             table_len_input.Render();
-            r.Text(-table_gui_rect_size/2 + table_gui_offset, Str("Начальная частота:\t", freq_min, "\n"
-                                                                  "Конечная частота: \t", freq_max)).font(font_small).color(text_color).align(ivec2(-1));
-            r.Text(-table_gui_rect_size/2 + table_gui_offset + ivec2(0,108), Str("Шаг частоты: \t\t\t", table_len_input.invalid ? "?" : Str((freq_max - freq_min)/(table_len_input_value-1)) )).font(font_small).color(text_color).align(ivec2(-1));
+            if (cur_state != State::step)
+            {
+                r.Text(-table_gui_rect_size/2 + table_gui_offset, Str("Начальная частота:\t", freq_min, "\n"
+                                                                      "Конечная частота: \t", freq_max)).font(font_small).color(text_color).align(ivec2(-1));
+                r.Text(-table_gui_rect_size/2 + table_gui_offset + ivec2(0,108), Str("Шаг частоты: \t\t\t", table_len_input.invalid ? "?" : Str((freq_max - freq_min)/(table_len_input_value-1)) )).font(font_small).color(text_color).align(ivec2(-1));
+            }
+            else
+            {
+                r.Text(-table_gui_rect_size/2 + table_gui_offset, Str("Начальное время:\t", time_min, "с\n"
+                                                                      "Конечное время:\t", time_max, "с")).font(font_small).color(text_color).align(ivec2(-1));
+                r.Text(-table_gui_rect_size/2 + table_gui_offset + ivec2(0,108), Str("Шаг времени:\t", table_len_input.invalid ? "?" : Str((time_max - time_min)/(table_len_input_value-1)), "с")).font(font_small).color(text_color).align(ivec2(-1));
+            }
 
             if (table_gui_button_hovered_l)
             {
