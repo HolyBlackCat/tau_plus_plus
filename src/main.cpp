@@ -1,6 +1,6 @@
 #include "everything.h"
 
-#define VERSION "1.2.7"
+#define VERSION "1.2.8"
 
 //#define FORCE_ACCUMULATOR // Use accumulator even if framebuffers are supported.
 //#define FORCE_FRAMEBUFFER // Use framebuffers, halt if not supported.
@@ -36,7 +36,7 @@ Graphics::Font font_object_small;
 
 
 constexpr int interface_rect_height = 128;
-constexpr int max_poly_degree = 50;
+constexpr int max_poly_degree = 25;
 
 
 namespace External
@@ -293,6 +293,17 @@ namespace Draw
 inline namespace MathMisc
 {
     using complex_t = std::complex<long double>;
+
+    auto FixedAbs(complex_t x)
+    {
+        //return (x.real() >= 0 ? 1 : -1) * std::abs(x);
+        return std::abs(x);
+    }
+    auto FixedArg(complex_t x)
+    {
+        //return std::arg(x.real() >= 0 ? x : -x);
+        return std::arg(x);
+    }
 
     template <typename T> class BasicPolynominal
     {
@@ -1485,9 +1496,9 @@ class Expression
 
         long double ampl = frac.num_first_fac / frac.den_first_fac;
         for (const auto &root : frac.num_roots)
-            ampl *= std::abs(variable - root);
+            ampl *= FixedAbs(variable - root);
         for (const auto &root : frac.den_roots)
-            ampl /= std::abs(variable - root);
+            ampl /= FixedAbs(variable - root);
         return ampl;
     }
     long double EvalPhase(complex_t variable) const
@@ -1504,9 +1515,9 @@ class Expression
 
         long double phase = 0;
         for (const auto &root : frac.num_roots)
-            phase += std::arg(variable - root);
+            phase += FixedArg(variable - root);
         for (const auto &root : frac.den_roots)
-            phase -= std::arg(variable - root);
+            phase -= FixedArg(variable - root);
         return phase;
     }
     long double EvalStepResponse(long double t)
@@ -1800,6 +1811,12 @@ class Plot
     }
     Plot(const std::vector<Func> &funcs, long double a, long double b, int flags) : funcs(funcs), flags(flags), range_start(a), range_len(b - a)
     {
+        if (flags & horizontal_log10 && range_start < 0)
+        {
+            range_start = 0;
+            range_len = b;
+        }
+
         RecalculateDefaultOffsetAndScale();
         offset = default_offset;
         scale = default_scale;
@@ -2806,16 +2823,34 @@ int main(int, char **)
                         case State::phase:           file_name = "plot_phase.png";           break;
                         case State::amplitude_log10: file_name = "plot_amplitude_log10.png"; break;
                         case State::phase_log10:     file_name = "plot_phase_log10.png";     break;
-                        case State::step:            file_name = "plot_step_response.png";     break;
+                        case State::step:            file_name = "plot_step_response.png";   break;
                     }
 
-                    std::string text_func = func_input->value, text_min = range_input_min->value, text_max = range_input_max->value;
+                    std::string text_func = func_input->value, text_min, text_max;
+                    if (cur_state != State::step)
+                    {
+                        text_min = range_input_min->value;
+                        text_max = range_input_max->value;
+                    }
+                    else
+                    {
+                        text_min = time_input_min->value;
+                        text_max = time_input_max->value;
+                    }
                     for (auto *it : {&text_func, &text_min, &text_max})
                         it->erase(std::remove(it->begin(), it->end(), ' '), it->end());
                     r.Text(Draw::min + plot.ViewportPos() + text_offset, "W(s) = " + text_func)
                      .color(text_color).font(font_small).align(ivec2(-1)).preset(Draw::WithWhiteBackground(text_bg_alpha));
-                    r.Text(Draw::min + plot.ViewportPos() + text_offset.add_y(2+font_small.Height()), "Частоты от " + text_min + " до " + text_max + " рад/c")
-                     .color(text_color).font(font_small).align(ivec2(-1)).preset(Draw::WithWhiteBackground(text_bg_alpha));
+                    if (cur_state != State::step)
+                    {
+                        r.Text(Draw::min + plot.ViewportPos() + text_offset.add_y(2+font_small.Height()), "Частоты от " + text_min + " до " + text_max + " рад/c")
+                         .color(text_color).font(font_small).align(ivec2(-1)).preset(Draw::WithWhiteBackground(text_bg_alpha));
+                    }
+                    else
+                    {
+                        r.Text(Draw::min + plot.ViewportPos() + text_offset.add_y(2+font_small.Height()), "Время от " + text_min + " до " + text_max + " c")
+                         .color(text_color).font(font_small).align(ivec2(-1)).preset(Draw::WithWhiteBackground(text_bg_alpha));
+                    }
                     r.Finish();
 
                     Graphics::Image image(plot.ViewportSize());
