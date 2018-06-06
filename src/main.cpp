@@ -1,6 +1,6 @@
 #include "everything.h"
 
-#define VERSION "1.2.8"
+#define VERSION "1.2.9"
 
 //#define FORCE_ACCUMULATOR // Use accumulator even if framebuffers are supported.
 //#define FORCE_FRAMEBUFFER // Use framebuffers, halt if not supported.
@@ -37,6 +37,7 @@ Graphics::Font font_object_small;
 
 constexpr int interface_rect_height = 128;
 constexpr int max_poly_degree = 25;
+constexpr int max_int_pow = 5000;
 
 
 namespace External
@@ -508,11 +509,29 @@ inline namespace MathMisc
                 if (ret.size() && it->second >= 0)
                     ret += "+";
                 char buf[64];
-                std::snprintf(buf, sizeof buf, "%.8Lf", (long double)it->second);
-                std::string sbuf = buf;
-                while (sbuf.size() > 0 && (sbuf.back() == '0' || sbuf.back() == '.'))
-                    sbuf.resize(sbuf.size() - 1);
-                ret += sbuf;
+                std::snprintf(buf, sizeof buf, "%.8Lg", (long double)it->second);
+                auto fix = [](std::string x)
+                {
+                    auto e_it = std::find(x.begin(), x.end(), 'e');
+                    std::string a = std::string(x.begin(), e_it);
+                    if (e_it != x.end())
+                    {
+                        std::string b(std::next(e_it), x.end());
+                        while (b.size() > 1 && b.front() == '0')
+                            b.erase(b.begin());
+                        if (b[0] == '-' || b[0] == '+')
+                        {
+                            while (b.size() > 1 && b[1] == '0')
+                                b.erase(std::next(b.begin()));
+                            if (b.size() == 1)
+                                return a;
+                        }
+                        a += "*10^" + b;
+                    }
+                    return a;
+                };
+
+                ret += fix(buf);
                 if (it->first != 0)
                 {
                     ret += "s";
@@ -1247,7 +1266,7 @@ class Expression
               case Element::num:
                 {
                     StackElem el;
-                    if (elem.n.is_int && abs(elem.n.value) <= max_poly_degree + 0.5)
+                    if (elem.n.is_int && abs(elem.n.value) <= max_int_pow + 0.5)
                     {
                         el.is_int_lit = 1;
                         el.int_lit_value = iround(elem.n.value);
@@ -1296,8 +1315,8 @@ class Expression
                         result.frac = p1.frac / p2.frac;
                         break;
                       case Token::pow:
-                        if (!p2.is_int_lit || abs(p2.int_lit_value) > max_poly_degree)
-                            throw Exception(Str("Показатель степени должен быть целочисленной константой не больше ", max_poly_degree, "."), elem.position);
+                        if (!p2.is_int_lit || abs(p2.int_lit_value) > max_int_pow)
+                            throw Exception(Str("Показатель степени должен быть целочисленной константой не больше ", max_int_pow, "."), elem.position);
                         result.frac = p1.frac.Pow(p2.int_lit_value);
                         break;
                       case Token::left_paren:

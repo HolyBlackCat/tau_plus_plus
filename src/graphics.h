@@ -1344,7 +1344,7 @@ namespace Graphics
             Handle object;
           public:
             SeparateShader() {}
-            SeparateShader(ShaderType type) : object({type}) {}
+            SeparateShader(ShaderType type) : object(Handle::params_t{type}) {}
             void create(ShaderType type) {object.create({type});}
             void destroy() {object.destroy();}
             GLuint handle() const {return *object;}
